@@ -1,4 +1,5 @@
 import { transcribe } from "../ai";
+import { summarize, type UsageRow } from "../core/costs";
 import { groupItems } from "../core/group";
 import type { ReminderSettings } from "../core/reminders";
 import { addDays, civilOf, civilToIso, inQuietHours, isValidTimeZone, startOfLocalDay } from "../core/time";
@@ -142,6 +143,23 @@ export async function getBrief(repo: Repo, rs: ReminderSettings): Promise<Respon
   });
 }
 
+// ---- AI usage and cost ----
+
+/** Usage for one calendar month (UTC), with an estimated dollar cost per feature. */
+export async function getUsage(repo: Repo, url: URL): Promise<Response> {
+  const month = url.searchParams.get("month") ?? new Date().toISOString().slice(0, 7);
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) throw new HttpError(400, "bad_month");
+  const [y, m] = month.split("-").map(Number);
+  const start = new Date(Date.UTC(y, m - 1, 1)).toISOString();
+  const end = new Date(Date.UTC(y, m, 1)).toISOString();
+  const { results } = await repo.db
+    .prepare("SELECT payload_json FROM events WHERE type = 'model_usage' AND at >= ? AND at < ?")
+    .bind(start, end)
+    .all<{ payload_json: string }>();
+  const rows = results.map((r) => JSON.parse(r.payload_json) as UsageRow);
+  return json({ month, ...summarize(rows) });
+}
+
 // ---- export ----
 
 export async function exportAll(repo: Repo): Promise<Response> {
@@ -163,6 +181,18 @@ export async function buildExport(repo: Repo) {
   const { results: items } = await db.prepare("SELECT * FROM items ORDER BY created_at").all<ItemRow>();
   const { results: facts } = await db.prepare("SELECT * FROM facts ORDER BY created_at").all<Record<string, string | number | null>>();
   const { results: patterns } = await db.prepare("SELECT * FROM patterns").all();
+  const { results: links } = await db.prepare("SELECT * FROM links").all();
+  const { results: triggers } = await db.prepare("SELECT * FROM triggers").all();
+  const decNamed = async (table: string, rows: Record<string, string | null>[]) =>
+    Promise.all(
+      rows.map(async ({ name_enc, attrs_enc, ...rest }) => ({
+        ...rest,
+        name: await c.decrypt(name_enc!, `${table}:${rest.id}:name`),
+        attrs: attrs_enc ? JSON.parse(await c.decrypt(attrs_enc, `${table}:${rest.id}:attrs`)) : null,
+      })),
+    );
+  const things = await decNamed("things", (await db.prepare("SELECT * FROM things").all<Record<string, string | null>>()).results);
+  const places = await decNamed("places", (await db.prepare("SELECT * FROM places").all<Record<string, string | null>>()).results);
   const { results: events } = await db.prepare("SELECT id, at, type, item_id, nudge_type, payload_json FROM events ORDER BY at").all();
   const settings = await getSettingsMap(db);
   return {
@@ -184,11 +214,12 @@ export async function buildExport(repo: Repo) {
     ),
     items: await Promise.all(
       items.map(async (r) => {
-        const { title_enc, details_enc, ...rest } = r;
+        const { title_enc, details_enc, attrs_enc, ...rest } = r;
         return {
           ...rest,
           title: await c.decrypt(title_enc, `items:${r.id}:title`),
           details: await c.decryptNullable(details_enc, `items:${r.id}:details`),
+          attrs: attrs_enc ? JSON.parse(await c.decrypt(attrs_enc, `items:${r.id}:attrs`)) : null,
         };
       }),
     ),
@@ -198,6 +229,10 @@ export async function buildExport(repo: Repo) {
         return { ...rest, value: await c.decrypt(String(value_enc), `facts:${f.id}:value`) };
       }),
     ),
+    things,
+    places,
+    links,
+    triggers,
     patterns,
     events,
   };

@@ -1,0 +1,359 @@
+import { useEffect, useRef, useState } from "react";
+import { api, capture, type CaptureResult, type GapQuestion, type Item, type Person } from "./api";
+import { errText } from "./auth";
+import { localDate, when } from "./fmt";
+
+type SR = {
+  lang: string;
+  interimResults: boolean;
+  continuous: boolean;
+  start(): void;
+  stop(): void;
+  onresult: ((e: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void) | null;
+  onerror: ((e: { error: string }) => void) | null;
+  onend: (() => void) | null;
+};
+function speechRecognition(): (new () => SR) | null {
+  const w = window as unknown as { SpeechRecognition?: new () => SR; webkitSpeechRecognition?: new () => SR };
+  return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null;
+}
+
+/** One box for both telling and asking. */
+export function CaptureBox({ people, onCaptured }: { people: Person[]; onCaptured: () => void }) {
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [listening, setListening] = useState<"" | "speech" | "record">("");
+  const [result, setResult] = useState<CaptureResult | { type: "queued" } | null>(null);
+  const [err, setErr] = useState("");
+  const [source, setSource] = useState<"text" | "voice">("text");
+  const rec = useRef<{ stop: () => void } | null>(null);
+
+  async function submit(t = text, src = source) {
+    const v = t.trim();
+    if (!v) return;
+    setBusy(true);
+    setErr("");
+    try {
+      const r = await capture(v, src);
+      setResult(r);
+      setText("");
+      setSource("text");
+      if (r.type === "capture") onCaptured();
+    } catch (e) {
+      setErr(errText(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function recordAudio() {
+    // Fallback: record, then transcribe with Whisper on the Worker.
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const mime = ["audio/webm", "audio/mp4", "audio/ogg"].find((m) => MediaRecorder.isTypeSupported(m)) ?? "";
+    const mr = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+    const chunks: Blob[] = [];
+    mr.ondataavailable = (e) => chunks.push(e.data);
+    mr.onstop = async () => {
+      stream.getTracks().forEach((t) => t.stop());
+      setListening("");
+      const blob = new Blob(chunks, { type: mr.mimeType || "audio/webm" });
+      setBusy(true);
+      try {
+        const r = await api<{ text: string }>("/api/transcribe", { raw: blob, contentType: blob.type.split(";")[0] });
+        if (r.text) {
+          setText(r.text);
+          setSource("voice");
+        } else setErr("I didn't catch that.");
+      } catch (e) {
+        setErr(errText(e));
+      } finally {
+        setBusy(false);
+      }
+    };
+    mr.start();
+    setListening("record");
+    rec.current = { stop: () => mr.state !== "inactive" && mr.stop() };
+    setTimeout(() => rec.current?.stop(), 60_000); // one minute max
+  }
+
+  function mic() {
+    setErr("");
+    if (listening) {
+      rec.current?.stop();
+      return;
+    }
+    const Ctor = speechRecognition();
+    if (!Ctor) {
+      recordAudio().catch((e) => setErr(errText(e)));
+      return;
+    }
+    const sr = new Ctor();
+    sr.lang = "en-US";
+    sr.interimResults = false;
+    sr.continuous = false;
+    let got = false;
+    sr.onresult = (e) => {
+      got = true;
+      const t = Array.from(e.results)
+        .map((r) => r[0].transcript)
+        .join(" ");
+      setText(t);
+      setSource("voice");
+    };
+    sr.onerror = (e) => {
+      // Installed iOS web apps often fail here; fall back to recording.
+      if (e.error !== "aborted" && e.error !== "no-speech") {
+        setListening("");
+        recordAudio().catch((x) => setErr(errText(x)));
+      }
+    };
+    sr.onend = () => {
+      if (!got) setListening((l) => (l === "speech" ? "" : l));
+      else setListening("");
+    };
+    sr.start();
+    setListening("speech");
+    rec.current = sr;
+  }
+
+  return (
+    <section>
+      <form
+        className="capture"
+        onSubmit={(e) => {
+          e.preventDefault();
+          submit();
+        }}
+      >
+        <textarea
+          value={text}
+          onChange={(e) => {
+            setText(e.target.value);
+            setSource("text");
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              submit();
+            }
+          }}
+          placeholder="Tell me something, or ask…"
+          rows={2}
+          maxLength={2000}
+          aria-label="Tell or ask"
+        />
+        <div className="row">
+          <button type="button" className={listening ? "mic on" : "mic"} onClick={mic} aria-label={listening ? "Stop" : "Speak"}>
+            {listening ? "■" : "🎙"}
+          </button>
+          <button className="primary" disabled={busy || !text.trim()}>
+            {busy ? "…" : "Send"}
+          </button>
+        </div>
+      </form>
+      {err && <p className="error">{err}</p>}
+      {result?.type === "queued" && <p className="muted">Offline. Saved on this phone and will send when you're back online.</p>}
+      {result?.type === "capture" && (
+        <ConfirmCard key={result.item.id} item={result.item} question={result.question} people={people} onDone={() => setResult(null)} onChanged={onCaptured} />
+      )}
+      {result?.type === "answer" && <Answer answer={result.answer} disclaimer={result.disclaimer ?? null} items={result.items} onClose={() => setResult(null)} />}
+    </section>
+  );
+}
+
+function Answer({ answer, disclaimer, items, onClose }: { answer: string; disclaimer: string | null; items: Item[]; onClose: () => void }) {
+  return (
+    <div className="card answer">
+      <p className="prewrap">{answer}</p>
+      {disclaimer && <p className="muted small disclaimer">{disclaimer}</p>}
+      {items.length > 0 && (
+        <ul className="plain">
+          {items.map((i) => (
+            <li key={i.id}>
+              <a href={`#/item/${i.id}`}>{i.title}</a> <span className="muted small">{localDate(i.created_at)}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      <button className="link" onClick={onClose}>
+        Close
+      </button>
+    </div>
+  );
+}
+
+type Field = "title" | "for" | "by" | "when" | "place" | null;
+
+/** The confirmation line: one chip per field, tap to fix. Saves itself after 5 seconds of no interaction. */
+export function ConfirmCard({
+  item: initial,
+  question,
+  people,
+  onDone,
+  onChanged,
+}: {
+  item: Item;
+  question: GapQuestion | null;
+  people: Person[];
+  onDone: () => void;
+  onChanged: () => void;
+}) {
+  const [item, setItem] = useState(initial);
+  const [editing, setEditing] = useState<Field>(null);
+  const [touched, setTouched] = useState(!!question);
+  const [answer, setAnswer] = useState("");
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    if (touched) return;
+    const t = setTimeout(onDone, 5000);
+    return () => clearTimeout(t);
+  }, [touched, onDone]);
+
+  async function patch(body: Record<string, unknown>) {
+    try {
+      const r = await api<{ item: Item }>(`/api/items/${item.id}`, { method: "PATCH", body });
+      setItem(r.item);
+      setEditing(null);
+      onChanged();
+    } catch (e) {
+      setErr(errText(e));
+    }
+  }
+
+  async function answerQuestion(e: React.FormEvent) {
+    e.preventDefault();
+    if (!question || !answer.trim()) return;
+    try {
+      await api("/api/facts", { body: { subject_type: question.subject_type, subject_id: question.subject_id, key: question.key, value: answer.trim(), source: "asked" } });
+      onDone();
+    } catch (e) {
+      setErr(errText(e));
+    }
+  }
+
+  const chip = (f: Field, label: string | null, placeholder: string) => (
+    <button
+      type="button"
+      className={label ? "chip" : "chip empty"}
+      onClick={() => {
+        setTouched(true);
+        setEditing(editing === f ? null : f);
+      }}
+    >
+      {label ?? placeholder}
+    </button>
+  );
+
+  return (
+    <div className="card confirm" onPointerDown={() => setTouched(true)}>
+      <div className="chips">
+        {chip("title", item.title, "title")}
+        {chip("for", item.for_person ? `for ${item.for_person.name}` : null, "+ for")}
+        {chip("by", item.requested_by ? `asked by ${item.requested_by.name}` : null, "+ asked by")}
+        {chip("when", when(item), "+ when")}
+        {chip("place", item.place_hint, "+ place")}
+      </div>
+      {item.confidence != null && item.confidence < 0.6 && <p className="muted small">Not sure I got this right. Tap anything to fix it.</p>}
+
+      {editing === "title" && <TextEdit value={item.title} onSave={(v) => patch({ title: v })} />}
+      {editing === "place" && <TextEdit value={item.place_hint ?? ""} onSave={(v) => patch({ place_hint: v || null })} />}
+      {editing === "for" && <PersonPick people={people} value={item.for_person?.id ?? null} onSave={(id) => patch({ for_person_id: id })} />}
+      {editing === "by" && <PersonPick people={people} value={item.requested_by?.id ?? null} onSave={(id) => patch({ requested_by_person_id: id })} />}
+      {editing === "when" && <WhenEdit item={item} onSave={(b) => patch(b)} />}
+
+      {question && (
+        <form className="question" onSubmit={answerQuestion}>
+          <label>
+            {question.question}
+            <input value={answer} onChange={(e) => setAnswer(e.target.value)} />
+          </label>
+          <div className="row">
+            <button className="primary">Save</button>
+            <button type="button" className="link" onClick={onDone}>
+              Skip
+            </button>
+          </div>
+        </form>
+      )}
+      {err && <p className="error">{err}</p>}
+      {!question && touched && (
+        <button className="link" onClick={onDone}>
+          Done
+        </button>
+      )}
+    </div>
+  );
+}
+
+function TextEdit({ value, onSave }: { value: string; onSave: (v: string) => void }) {
+  const [v, setV] = useState(value);
+  return (
+    <form
+      className="row edit"
+      onSubmit={(e) => {
+        e.preventDefault();
+        onSave(v.trim());
+      }}
+    >
+      <input value={v} onChange={(e) => setV(e.target.value)} autoFocus maxLength={200} />
+      <button className="primary">Save</button>
+    </form>
+  );
+}
+
+export function PersonPick({ people, value, onSave }: { people: Person[]; value: string | null; onSave: (id: string | null) => void }) {
+  return (
+    <div className="chips edit">
+      <button type="button" className={value === null ? "chip on" : "chip"} onClick={() => onSave(null)}>
+        nobody
+      </button>
+      {people
+        .filter((p) => p.relation !== "self")
+        .map((p) => (
+          <button type="button" key={p.id} className={value === p.id ? "chip on" : "chip"} onClick={() => onSave(p.id)}>
+            {p.name}
+          </button>
+        ))}
+    </div>
+  );
+}
+
+export function WhenEdit({ item, onSave }: { item: Item; onSave: (b: Record<string, unknown>) => void }) {
+  const start = item.window_start ? localDate(item.window_start) : "";
+  const end = item.window_end ? localDate(new Date(new Date(item.window_end).getTime() - 1).toISOString()) : start;
+  const [s, setS] = useState(start);
+  const [e, setE] = useState(end);
+  const [t, setT] = useState("");
+  return (
+    <form
+      className="edit when"
+      onSubmit={(ev) => {
+        ev.preventDefault();
+        if (!s) return onSave({ start_date: null });
+        if (t) {
+          // Build the instant in the browser's zone; the server stores UTC.
+          const d = new Date(`${s}T${t}:00`);
+          return onSave({ due_at: d.toISOString() });
+        }
+        onSave({ start_date: s, end_date: e && e >= s ? e : s });
+      }}
+    >
+      <label>
+        From <input type="date" value={s} onChange={(x) => setS(x.target.value)} />
+      </label>
+      <label>
+        To <input type="date" value={e} onChange={(x) => setE(x.target.value)} />
+      </label>
+      <label>
+        At <input type="time" value={t} onChange={(x) => setT(x.target.value)} />
+      </label>
+      <div className="row">
+        <button className="primary">Save</button>
+        <button type="button" className="link" onClick={() => onSave({ start_date: null })}>
+          No date
+        </button>
+      </div>
+    </form>
+  );
+}

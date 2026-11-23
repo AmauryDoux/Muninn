@@ -1,7 +1,7 @@
-import { answerQuestion, embed, parseNote, type AnswerItem } from "../ai";
+import { answerQuestion, embed, giveAdvice, parseNote, type AnswerItem } from "../ai";
 import { cleanRelation, isSelfMention, matchPerson, normalizeMention, type Person, type PersonMention } from "../core/people";
 import { buildRecallQuery } from "../core/recall";
-import { PARSER_VERSION, type CaptureOut, type RecallOut } from "../core/schema";
+import { DISCLAIMERS, PARSER_VERSION, type CaptureOut, type ParseOutput, type RecallOut } from "../core/schema";
 import { civilOf, civilToIso, resolveTimeRef } from "../core/time";
 import { HttpError, json, readJson, str } from "../lib/http";
 import { ulid } from "../lib/ulid";
@@ -56,15 +56,26 @@ export async function handleCapture(repo: Repo, req: Request, tz: string): Promi
   const people = await repo.people();
   const factKeys = await repo.activeFactKeys();
   const nameOf = (id: string | null) => people.find((p) => p.id === id)?.name ?? "me";
-  const { out, model } = await parseNote(repo.env, text, {
-    now,
-    tz,
-    people: people.map((p) => ({ name: p.name, aliases: p.aliases, relation: p.relation })),
-    knownFacts: factKeys.map((f) => ({ subject: f.subject_type === "me" ? "me" : nameOf(f.subject_id), key: f.key })),
-  });
+  let out: ParseOutput | null = null;
+  let model: string | null = repo.env.PARSE_MODEL;
+  try {
+    ({ out, model } = await parseNote(repo.env, text, {
+      now,
+      tz,
+      people: people.map((p) => ({ name: p.name, aliases: p.aliases, relation: p.relation })),
+      knownFacts: factKeys.map((f) => ({ subject: f.subject_type === "me" ? "me" : nameOf(f.subject_id), key: f.key })),
+    }));
+  } catch (e) {
+    // Never lose a capture because the model is down: keep the raw note and let the user fix it.
+    console.error("parse failed", e instanceof Error ? e.message : e);
+    model = null;
+  }
 
   if (out?.intent === "recall" && out.recall) {
     return json({ type: "answer", ...(await recall(repo, text, out.recall, people, now, tz)) });
+  }
+  if (out?.intent === "advice") {
+    return json({ type: "answer", ...(await advise(repo, text, people, now, tz)) });
   }
 
   const cap: CaptureOut = out?.capture ?? {
@@ -167,6 +178,65 @@ export async function handleCapture(repo: Repo, req: Request, tz: string): Promi
   return json({ type: "capture", item: (await repo.itemViews([row]))[0], question });
 }
 
+function toAnswerItems(views: Awaited<ReturnType<Repo["itemViews"]>>, tz: string): AnswerItem[] {
+  const fmt = (iso: string | null) => (iso ? civilToIso(civilOf(new Date(iso), tz)) : null);
+  return views.map((v) => ({
+    id: v.id,
+    title: v.title,
+    details: v.details,
+    kind: v.kind,
+    status: v.status,
+    captured: fmt(v.created_at)!,
+    scheduled: v.due_at ? fmt(v.due_at) : v.window_start ? `${fmt(v.window_start)}..${fmt(new Date(new Date(v.window_end!).getTime() - 1).toISOString())}` : null,
+    for_person: v.for_person?.name ?? null,
+    requested_by: v.requested_by?.name ?? null,
+  }));
+}
+
+/** On-demand advice, grounded in the profile (facts, people) and the notes closest to the question. */
+async function advise(repo: Repo, question: string, people: Person[], now: Date, tz: string) {
+  const byId = new Map(people.map((p) => [p.id, p]));
+  const { results } = await repo.db
+    .prepare("SELECT id, subject_type, subject_id, key, value_enc FROM facts WHERE active = 1 ORDER BY created_at DESC LIMIT 150")
+    .all<{ id: string; subject_type: string; subject_id: string | null; key: string; value_enc: string }>();
+  const facts = await Promise.all(
+    results.map(async (f) => ({
+      id: f.id,
+      about: f.subject_type === "me" ? "me" : (byId.get(f.subject_id ?? "")?.name ?? f.subject_type),
+      key: f.key,
+      value: await repo.cipher.decrypt(f.value_enc, `facts:${f.id}:value`),
+    })),
+  );
+  let related: ItemRow[] = [];
+  try {
+    const hits = await searchVectors(repo.env, await embed(repo.env, question), 8);
+    if (hits.length) {
+      const ids = hits.map((h) => h.itemId);
+      related = (await repo.db.prepare(`SELECT * FROM items WHERE id IN (${ids.map(() => "?").join(",")})`).bind(...ids).all<ItemRow>()).results;
+    }
+  } catch (e) {
+    console.warn("advice search failed", e instanceof Error ? e.message : e);
+  }
+  const views = await repo.itemViews(related);
+  const self = people.find((p) => p.relation === "self");
+  const adv = await giveAdvice(repo.env, question, {
+    today: civilToIso(civilOf(now, tz)),
+    me: self?.name ?? "me",
+    people: people.filter((p) => p.relation !== "self").map((p) => ({ name: p.name, relation: p.relation })),
+    facts,
+    related: toAnswerItems(views, tz),
+  });
+  if (!adv) return { answer: "I couldn't give advice on that one.", items: [], advice: true };
+  const cited = new Set(adv.cited_ids);
+  return {
+    answer: adv.answer,
+    // Added by code, not left to the model, so it is always there.
+    disclaimer: adv.sensitive_domain !== "none" ? DISCLAIMERS[adv.sensitive_domain] : null,
+    items: views.filter((v) => cited.has(v.id)),
+    advice: true,
+  };
+}
+
 async function recall(repo: Repo, question: string, r: RecallOut, people: Person[], now: Date, tz: string) {
   const today = civilToIso(civilOf(now, tz));
   const unknown: string[] = [];
@@ -213,18 +283,7 @@ async function recall(repo: Repo, question: string, r: RecallOut, people: Person
 
   if (!rows.length) return { answer: "I have nothing on that.", items: [] };
   const views = await repo.itemViews(rows);
-  const fmt = (iso: string | null) => (iso ? civilToIso(civilOf(new Date(iso), tz)) : null);
-  const forModel: AnswerItem[] = views.map((v) => ({
-    id: v.id,
-    title: v.title,
-    details: v.details,
-    kind: v.kind,
-    status: v.status,
-    captured: fmt(v.created_at)!,
-    scheduled: v.due_at ? fmt(v.due_at) : v.window_start ? `${fmt(v.window_start)}..${fmt(new Date(new Date(v.window_end!).getTime() - 1).toISOString())}` : null,
-    for_person: v.for_person?.name ?? null,
-    requested_by: v.requested_by?.name ?? null,
-  }));
+  const forModel = toAnswerItems(views, tz);
   const ans = await answerQuestion(repo.env, question, forModel, today);
   if (!ans) return { answer: "I couldn't answer that one. Here is what matched.", items: views };
   const cited = new Set(ans.cited_ids);

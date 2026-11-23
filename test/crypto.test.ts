@@ -42,8 +42,8 @@ describe("web push", () => {
 
   it("signs a verifiable ES256 VAPID token", async () => {
     const kp = (await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"])) as CryptoKeyPair;
-    const jwk = await crypto.subtle.exportKey("jwk", kp.privateKey);
-    const pub = new Uint8Array(await crypto.subtle.exportKey("raw", kp.publicKey));
+    const jwk = (await crypto.subtle.exportKey("jwk", kp.privateKey)) as JsonWebKey;
+    const pub = new Uint8Array((await crypto.subtle.exportKey("raw", kp.publicKey)) as ArrayBuffer);
     const jwt = await vapidJwt("https://web.push.apple.com", { publicKey: toB64url(pub), privateKey: jwk.d!, subject: "mailto:a@example.invalid" });
     const [h, c, s] = jwt.split(".");
     const ok = await crypto.subtle.verify({ name: "ECDSA", hash: "SHA-256" }, kp.publicKey, fromB64url(s), new TextEncoder().encode(`${h}.${c}`));

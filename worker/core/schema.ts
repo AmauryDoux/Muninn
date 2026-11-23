@@ -64,10 +64,27 @@ export const RecallSchema = z.object({
 });
 
 export const ParseSchema = z.object({
-  intent: z.enum(["capture", "recall"]).describe("capture: the user is telling something to remember or do. recall: the user is asking a question."),
+  intent: z
+    .enum(["capture", "recall", "advice"])
+    .describe("capture: the user tells something to remember or do. recall: the user asks what they captured. advice: the user asks for a suggestion, recommendation or how-to."),
   capture: CaptureSchema.nullable(),
   recall: RecallSchema.nullable(),
 });
+
+export const AdviceSchema = z.object({
+  answer: z.string().describe("Practical, personal advice in at most 6 short sentences or a short list."),
+  cited_ids: z.array(z.string()).describe("Ids of the user's items or facts the advice relies on."),
+  sensitive_domain: z
+    .enum(["none", "health", "finance", "legal"])
+    .describe("health: medical, medication, mental health. finance: money, tax, investing, debt. legal: law, contracts, rights."),
+});
+export type AdviceOut = z.infer<typeof AdviceSchema>;
+
+export const DISCLAIMERS: Record<"health" | "finance" | "legal", string> = {
+  health: "General information, not medical advice. Check with a doctor or pharmacist.",
+  finance: "General information, not financial advice.",
+  legal: "General information, not legal advice.",
+};
 
 export type ParseOutput = z.infer<typeof ParseSchema>;
 export type CaptureOut = z.infer<typeof CaptureSchema>;

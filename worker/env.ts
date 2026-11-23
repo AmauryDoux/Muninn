@@ -7,6 +7,7 @@ export interface Env {
 
   // vars
   PARSE_MODEL: string;
+  ADVICE_MODEL: string;
   EMBED_MODEL: string;
   WHISPER_MODEL: string;
   VAPID_PUBLIC_KEY: string;

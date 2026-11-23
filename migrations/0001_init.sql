@@ -16,9 +16,13 @@ CREATE TABLE captures (
 CREATE TABLE items (
   id TEXT PRIMARY KEY,
   capture_id TEXT REFERENCES captures(id),
-  kind TEXT NOT NULL CHECK (kind IN ('task', 'note', 'fact', 'event')),
+  -- No CHECK on kind/subtype: new kinds (gift_idea, warranty, service_record, medication, ...) must not need a table rebuild.
+  -- v1 writes task / note / fact / event. Code validates the allowed set.
+  kind TEXT NOT NULL,
+  subtype TEXT,                 -- finer type for later features, e.g. 'gift_idea', 'warranty', 'service_record'
   title_enc TEXT NOT NULL,
   details_enc TEXT,
+  attrs_enc TEXT,               -- encrypted JSON object of typed attributes (price, serial, store, expires_on, ...)
   for_person_id TEXT REFERENCES people(id),
   requested_by_person_id TEXT REFERENCES people(id),
   window_start TEXT,
@@ -27,7 +31,7 @@ CREATE TABLE items (
   status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'done', 'dropped')),
   place_hint TEXT,
   confidence REAL,
-  recurrence TEXT,
+  recurrence TEXT,              -- RFC 5545 RRULE subset, e.g. 'FREQ=YEARLY' or 'FREQ=MONTHS;INTERVAL=6' (not acted on in v1)
   snoozed_until TEXT,
   reminded_start_at TEXT,
   reminded_end_at TEXT,
@@ -49,10 +53,11 @@ CREATE TABLE people (
 
 CREATE TABLE facts (
   id TEXT PRIMARY KEY,
-  subject_type TEXT NOT NULL CHECK (subject_type IN ('person', 'me', 'thing')),
+  subject_type TEXT NOT NULL CHECK (subject_type IN ('person', 'me', 'thing', 'place')),
   subject_id TEXT,
   key TEXT NOT NULL,
   value_enc TEXT NOT NULL,
+  value_type TEXT NOT NULL DEFAULT 'text' CHECK (value_type IN ('text', 'date', 'number', 'json')), -- 'date' facts (birthdays) can anchor triggers
   source TEXT NOT NULL CHECK (source IN ('told', 'asked', 'observed')),
   confidence REAL NOT NULL DEFAULT 1,
   review_after TEXT,
@@ -60,6 +65,57 @@ CREATE TABLE facts (
   active INTEGER NOT NULL DEFAULT 1
 ) STRICT;
 CREATE INDEX facts_subject ON facts(subject_type, subject_id, key, active);
+
+-- Things you own or look after: car, boiler, passport, spare key. Service history, warranties and
+-- home inventory hang off these through links. Empty in v1.
+CREATE TABLE things (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,           -- 'vehicle', 'appliance', 'document', 'key', ...
+  name_enc TEXT NOT NULL,
+  attrs_enc TEXT,               -- encrypted JSON: model, serial, bought_on, location ("drawer by the door"), ...
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+) STRICT;
+
+-- Saved places (v2 errands). Empty in v1.
+CREATE TABLE places (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,           -- 'store', 'home', 'school', 'doctor', ...
+  name_enc TEXT NOT NULL,
+  attrs_enc TEXT,               -- encrypted JSON: address, coordinates, place id, opening hours
+  created_at TEXT NOT NULL
+) STRICT;
+
+-- Generic links from an item to people, places and things, with a role ('gift_for', 'about', 'owed_by', 'at', ...).
+-- for_person_id / requested_by_person_id stay as columns because v1 filters on them constantly.
+CREATE TABLE links (
+  item_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+  target_type TEXT NOT NULL CHECK (target_type IN ('person', 'place', 'thing', 'item')),
+  target_id TEXT NOT NULL,
+  role TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (item_id, target_type, target_id, role)
+) STRICT;
+CREATE INDEX links_target ON links(target_type, target_id);
+
+-- Date-relative triggers: "2 weeks before Emma's birthday", "6 months after the last oil change",
+-- "30 days before the warranty ends". The anchor is a dated fact, an item date or a fixed date;
+-- code computes next_fire_at. Not evaluated by the v1 cron.
+CREATE TABLE triggers (
+  id TEXT PRIMARY KEY,
+  item_id TEXT REFERENCES items(id) ON DELETE CASCADE,
+  anchor_type TEXT NOT NULL CHECK (anchor_type IN ('fact', 'item', 'date')),
+  anchor_id TEXT,               -- facts.id or items.id
+  anchor_field TEXT,            -- for items: 'window_start', 'due_at', or an attrs key such as 'warranty_ends_on'
+  anchor_date TEXT,             -- for anchor_type 'date': YYYY-MM-DD
+  offset_days INTEGER NOT NULL DEFAULT 0,  -- negative = before
+  repeat TEXT,                  -- RRULE subset applied to the anchor, e.g. 'FREQ=YEARLY' for birthdays
+  next_fire_at TEXT,
+  last_fired_at TEXT,
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL
+) STRICT;
+CREATE INDEX triggers_next ON triggers(active, next_fire_at);
 
 CREATE TABLE patterns (
   id TEXT PRIMARY KEY,

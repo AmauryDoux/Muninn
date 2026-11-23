@@ -2,7 +2,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { ItemView, Repo } from "./repo";
 import { getSetting, setSetting } from "./lib/settings";
-import { ulid } from "./lib/ulid";
+import { logUsage } from "./lib/usage";
 
 export async function briefText(repo: Repo, date: string, today: ItemView[], overdue: ItemView[]): Promise<string> {
   if (!today.length && !overdue.length) return "Nothing due today.";
@@ -34,10 +34,7 @@ export async function briefText(repo: Repo, date: string, today: ItemView[], ove
         },
       ],
     });
-    await repo.db
-      .prepare("INSERT INTO events (id, at, type, payload_json) VALUES (?, ?, 'model_usage', ?)")
-      .bind(ulid(), new Date().toISOString(), JSON.stringify({ job: "brief", model: repo.env.PARSE_MODEL, in: res.usage.input_tokens, out: res.usage.output_tokens }))
-      .run();
+    await logUsage(repo.db, "brief", repo.env.PARSE_MODEL, res.usage);
     const text = res.content
       .flatMap((b) => (b.type === "text" ? [b.text] : []))
       .join(" ")

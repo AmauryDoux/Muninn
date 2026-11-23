@@ -32,7 +32,10 @@
   // "r2_buckets": [{ "binding": "BACKUPS", "bucket_name": "muninn-backups" }],
   "triggers": { "crons": ["*/5 * * * *"] },
   "vars": {
+    // Haiku 5.5 reads notes, answers recall questions and words the brief (cheap, high volume).
     "PARSE_MODEL": "claude-haiku-5-5",
+    // Sonnet 5.5 for advice (low volume, needs judgment). Set to claude-haiku-5-5 to cut cost further.
+    "ADVICE_MODEL": "claude-sonnet-5-5",
     "EMBED_MODEL": "@cf/baai/bge-base-en-v1.5",
     "WHISPER_MODEL": "@cf/openai/whisper",
     // Public half of the VAPID key pair (safe to commit once generated; the private half is a secret).

@@ -8,8 +8,10 @@ export interface ItemRow {
   id: string;
   capture_id: string | null;
   kind: string;
+  subtype: string | null;
   title_enc: string;
   details_enc: string | null;
+  attrs_enc: string | null;
   for_person_id: string | null;
   requested_by_person_id: string | null;
   window_start: string | null;
@@ -29,8 +31,10 @@ export interface ItemRow {
 export interface ItemView {
   id: string;
   kind: string;
+  subtype: string | null;
   title: string;
   details: string | null;
+  attrs: Record<string, unknown> | null;
   for_person: { id: string; name: string } | null;
   requested_by: { id: string; name: string } | null;
   window_start: string | null;
@@ -104,8 +108,10 @@ export class Repo {
     return {
       id: r.id,
       kind: r.kind,
+      subtype: r.subtype,
       title: await this.cipher.decrypt(r.title_enc, `items:${r.id}:title`),
       details: await this.cipher.decryptNullable(r.details_enc, `items:${r.id}:details`),
+      attrs: r.attrs_enc ? (JSON.parse(await this.cipher.decrypt(r.attrs_enc, `items:${r.id}:attrs`)) as Record<string, unknown>) : null,
       for_person: person(r.for_person_id),
       requested_by: person(r.requested_by_person_id),
       window_start: r.window_start,
