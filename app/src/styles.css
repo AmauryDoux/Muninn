@@ -99,3 +99,7 @@ code { font-size: 0.85em; }
 table.usage { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
 table.usage td { padding: 0.3rem 0; border-bottom: 1px solid var(--line); }
 table.usage td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.strength.s0 { color: var(--danger); }
+.strength.s1 { color: var(--accent); }
+.strength.s2, .strength.s3 { color: var(--ok); }
+.center-text { text-align: center; margin: 0; }

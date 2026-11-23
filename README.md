@@ -48,7 +48,7 @@ You need a Cloudflare account (free plan) and an Anthropic API key. Everything b
    npm run db:migrate:remote
    npm run deploy
    ```
-5. **Set up on your phone.** Open the `*.workers.dev` URL in Safari, Share → Add to Home Screen, open Muninn from the Home Screen, enter the setup code and a passphrase (16+ characters), add a passkey, then Settings → Turn on reminders. The setup route closes for good after the first success.
+5. **Set up on your phone.** Open the `*.workers.dev` URL in Safari, Share → Add to Home Screen, open Muninn from the Home Screen, enter the setup code, pick a username and password (8+ characters with upper, lower, number and symbol), add a passkey, then Settings → Turn on reminders. The setup route closes for good after the first success.
 
 Recommended hardening:
 - Anthropic Console: a dedicated workspace for Muninn with a monthly spend limit (for example $10).

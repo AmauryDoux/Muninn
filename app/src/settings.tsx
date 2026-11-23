@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "./api";
-import { errText, registerPasskey } from "./auth";
+import { PasswordHint, errText, registerPasskey } from "./auth";
 import { ago, setTz } from "./fmt";
 
 interface SettingsResp {
@@ -156,7 +156,7 @@ export function Settings({ onSignedOut }: { onSignedOut: () => void }) {
           ))}
         </ul>
         <button onClick={addPasskey}>Add a passkey</button>
-        <ChangePassphrase onMsg={setMsg} />
+        <ChangePassword onMsg={setMsg} />
         <div className="row">
           <button onClick={() => api("/api/auth/logout", { method: "POST", body: {} }).then(onSignedOut)}>Sign out</button>
           <button className="danger" onClick={() => confirm("Sign out every device?") && api("/api/auth/logout-all", { method: "POST", body: {} }).then(onSignedOut)}>
@@ -176,35 +176,45 @@ export function Settings({ onSignedOut }: { onSignedOut: () => void }) {
   );
 }
 
-function ChangePassphrase({ onMsg }: { onMsg: (m: string) => void }) {
+function ChangePassword({ onMsg }: { onMsg: (m: string) => void }) {
   const [open, setOpen] = useState(false);
+  const [username, setUsername] = useState("");
   const [p, setP] = useState("");
+  useEffect(() => {
+    if (open) api<{ username: string | null }>("/api/auth/username").then((r) => setUsername(r.username ?? ""));
+  }, [open]);
   if (!open)
     return (
       <button className="link" onClick={() => setOpen(true)}>
-        Change passphrase
+        Change username or password
       </button>
     );
   return (
     <form
-      className="row"
       onSubmit={async (e) => {
         e.preventDefault();
         try {
-          await api("/api/auth/passphrase", { body: { passphrase: p } });
-          onMsg("Passphrase changed.");
+          await api("/api/auth/password", { body: { username, password: p } });
+          onMsg("Saved. Your password manager should offer to update it.");
           setOpen(false);
         } catch (x) {
           onMsg(errText(x));
         }
       }}
     >
-      <input type="password" minLength={16} value={p} onChange={(e) => setP(e.target.value)} autoComplete="new-password" placeholder="16+ characters" />
+      <label>
+        Username
+        <input name="username" value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" autoCapitalize="none" autoCorrect="off" spellCheck={false} />
+      </label>
+      <label>
+        New password
+        <input name="password" type="password" value={p} onChange={(e) => setP(e.target.value)} autoComplete="new-password" />
+      </label>
+      <PasswordHint username={username} password={p} />
       <button className="primary">Save</button>
     </form>
   );
 }
-
 interface UsageResp {
   month: string;
   calls: number;

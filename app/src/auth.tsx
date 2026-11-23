@@ -1,5 +1,6 @@
 import { startAuthentication, startRegistration } from "@simplewebauthn/browser";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { MIN_PASSWORD, PASSWORD_RULES, passwordProblem, passwordStrength } from "../../worker/core/password";
 import { api, ApiError } from "./api";
 
 export async function passkeyLogin(): Promise<void> {
@@ -26,9 +27,23 @@ export function errText(e: unknown): string {
   return "Something went wrong.";
 }
 
+const STRENGTH = ["Too short", "OK. Longer is stronger.", "Good", "Strong"];
+
+export function PasswordHint({ username, password }: { username: string; password: string }) {
+  if (!password) return <p className="muted small">{PASSWORD_RULES}</p>;
+  const problem = passwordProblem(username, password);
+  const s = passwordStrength(password);
+  return (
+    <p className={`small strength s${problem ? 0 : s}`} aria-live="polite">
+      {problem ?? STRENGTH[s]}
+    </p>
+  );
+}
+
 export function Setup({ onDone }: { onDone: () => void }) {
   const [code, setCode] = useState("");
   const [name, setName] = useState("");
+  const [username, setUsername] = useState("");
   const [pass, setPass] = useState("");
   const [pass2, setPass2] = useState("");
   const [err, setErr] = useState("");
@@ -37,11 +52,11 @@ export function Setup({ onDone }: { onDone: () => void }) {
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (pass !== pass2) return setErr("The passphrases do not match.");
+    if (pass !== pass2) return setErr("The passwords do not match.");
     setBusy(true);
     setErr("");
     try {
-      await api("/api/auth/setup", { body: { code: code.trim(), passphrase: pass, tz, name: name.trim() } });
+      await api("/api/auth/setup", { body: { code: code.trim(), username: username.trim(), password: pass, tz, name: name.trim() } });
       onDone();
     } catch (e) {
       setErr(errText(e));
@@ -51,39 +66,44 @@ export function Setup({ onDone }: { onDone: () => void }) {
   }
 
   return (
-    <form className="card auth" onSubmit={submit}>
+    <form className="card auth" onSubmit={submit} method="post" action="/login">
       <h1>Set up Muninn</h1>
-      <p className="muted">Enter the one-time setup code you stored with <code>wrangler secret put SETUP_CODE</code>, and choose a long passphrase as your fallback login. You will add a passkey next.</p>
+      <p className="muted">Enter the setup code you stored with <code>wrangler secret put SETUP_CODE</code>, then pick a username and password. You will add a passkey (Face ID) next.</p>
       <label>
         Setup code
-        <input value={code} onChange={(e) => setCode(e.target.value)} autoComplete="off" required />
+        <input name="setup-code" value={code} onChange={(e) => setCode(e.target.value)} autoComplete="one-time-code" autoCapitalize="characters" required />
       </label>
       <label>
-        Your name
-        <input value={name} onChange={(e) => setName(e.target.value)} autoComplete="given-name" />
+        Your first name
+        <input name="name" value={name} onChange={(e) => setName(e.target.value)} autoComplete="given-name" />
       </label>
       <label>
-        Passphrase (16+ characters)
-        <input type="password" value={pass} onChange={(e) => setPass(e.target.value)} autoComplete="new-password" minLength={16} required />
+        Username
+        <input name="username" value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" autoCapitalize="none" autoCorrect="off" spellCheck={false} required />
       </label>
       <label>
-        Passphrase again
-        <input type="password" value={pass2} onChange={(e) => setPass2(e.target.value)} autoComplete="new-password" required />
+        Password
+        <input name="password" type="password" value={pass} onChange={(e) => setPass(e.target.value)} autoComplete="new-password" minLength={MIN_PASSWORD} required />
+      </label>
+      <PasswordHint username={username} password={pass} />
+      <label>
+        Confirm password
+        <input name="password-confirm" type="password" value={pass2} onChange={(e) => setPass2(e.target.value)} autoComplete="new-password" required />
       </label>
       <p className="muted small">Time zone: {tz}</p>
       {err && <p className="error">{err}</p>}
       <button className="primary" disabled={busy}>
-        {busy ? "Setting up…" : "Set up"}
+        {busy ? "Setting up…" : "Create account"}
       </button>
     </form>
   );
 }
 
-export function Login({ hasPasskey, onDone }: { hasPasskey: boolean; onDone: () => void }) {
+export function Login({ hasPasskey, needsUsername, onDone }: { hasPasskey: boolean; needsUsername: boolean; onDone: () => void }) {
+  const [username, setUsername] = useState("");
   const [pass, setPass] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
-  const [showPass, setShowPass] = useState(!hasPasskey);
 
   async function withPasskey() {
     setBusy(true);
@@ -98,15 +118,15 @@ export function Login({ hasPasskey, onDone }: { hasPasskey: boolean; onDone: () 
     }
   }
 
-  async function withPass(e: React.FormEvent) {
+  async function withPassword(e: React.FormEvent) {
     e.preventDefault();
     setBusy(true);
     setErr("");
     try {
-      await api("/api/auth/login", { body: { passphrase: pass } });
+      await api("/api/auth/login", { body: { username: username.trim(), password: pass } });
       onDone();
     } catch (e) {
-      setErr(errText(e));
+      setErr(errText(e).replace("bad credentials", "Wrong username or password."));
     } finally {
       setBusy(false);
     }
@@ -116,31 +136,40 @@ export function Login({ hasPasskey, onDone }: { hasPasskey: boolean; onDone: () 
     <div className="card auth">
       <h1>Muninn</h1>
       {hasPasskey && (
-        <button className="primary" onClick={withPasskey} disabled={busy}>
-          Sign in with passkey
-        </button>
+        <>
+          <button className="primary" onClick={withPasskey} disabled={busy}>
+            Sign in with passkey
+          </button>
+          <p className="muted small center-text">or</p>
+        </>
       )}
-      {showPass ? (
-        <form onSubmit={withPass}>
-          <label>
-            Passphrase
-            <input type="password" value={pass} onChange={(e) => setPass(e.target.value)} autoComplete="current-password" required />
-          </label>
-          <button disabled={busy}>Sign in</button>
-        </form>
-      ) : (
-        <button className="link" onClick={() => setShowPass(true)}>
-          Use passphrase instead
+      <form onSubmit={withPassword} method="post" action="/login">
+        {needsUsername && <p className="notice small">Usernames are new. Choose one now and sign in with your current passphrase as the password; you can change the password in Settings.</p>}
+        <label>
+          Username
+          <input name="username" value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" autoCapitalize="none" autoCorrect="off" spellCheck={false} required />
+        </label>
+        <label>
+          Password
+          <input name="password" type="password" value={pass} onChange={(e) => setPass(e.target.value)} autoComplete="current-password" required />
+        </label>
+        <button className={hasPasskey ? "" : "primary"} disabled={busy}>
+          Sign in
         </button>
-      )}
+      </form>
       {err && <p className="error">{err}</p>}
     </div>
   );
 }
 
-/** Modal for sensitive screens: passkey first, passphrase fallback. */
+/** Modal for sensitive screens: passkey first, password fallback. */
 export function Reauth({ hasPasskey, onClose }: { hasPasskey: boolean; onClose: (ok: boolean) => void }) {
   const [pass, setPass] = useState("");
+  const [username, setUsername] = useState("");
+  useEffect(() => {
+    // Lets the password manager match the saved login.
+    api<{ username: string | null }>("/api/auth/username").then((r) => setUsername(r.username ?? "")).catch(() => {});
+  }, []);
   const [err, setErr] = useState("");
 
   async function viaPasskey() {
@@ -154,7 +183,7 @@ export function Reauth({ hasPasskey, onClose }: { hasPasskey: boolean; onClose: 
   async function viaPass(e: React.FormEvent) {
     e.preventDefault();
     try {
-      await api("/api/auth/reauth", { body: { passphrase: pass } });
+      await api("/api/auth/reauth", { body: { password: pass } });
       onClose(true);
     } catch (e) {
       setErr(errText(e));
@@ -171,9 +200,10 @@ export function Reauth({ hasPasskey, onClose }: { hasPasskey: boolean; onClose: 
           </button>
         )}
         <form onSubmit={viaPass}>
+          <input type="text" name="username" value={username} autoComplete="username" readOnly hidden />
           <label>
-            Passphrase
-            <input type="password" value={pass} onChange={(e) => setPass(e.target.value)} autoComplete="current-password" />
+            Password
+            <input name="password" type="password" value={pass} onChange={(e) => setPass(e.target.value)} autoComplete="current-password" />
           </label>
           <button>Confirm</button>
         </form>

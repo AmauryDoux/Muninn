@@ -11,6 +11,7 @@ interface Status {
   setup_done: boolean;
   signed_in: boolean;
   has_passkey: boolean;
+  needs_username: boolean;
 }
 type Tab = "home" | "upcoming" | "done" | "know" | "settings";
 
@@ -44,7 +45,7 @@ export function App() {
 
   if (!status) return <p className="muted center">{err || "…"}</p>;
   if (!status.setup_done) return <Setup onDone={refreshStatus} />;
-  if (!status.signed_in) return <Login hasPasskey={status.has_passkey} onDone={refreshStatus} />;
+  if (!status.signed_in) return <Login hasPasskey={status.has_passkey} needsUsername={status.needs_username} onDone={refreshStatus} />;
   return (
     <>
       <Main hasPasskey={status.has_passkey} onSignedOut={refreshStatus} onPasskeyAdded={refreshStatus} />
@@ -164,7 +165,7 @@ function PasskeyNudge({ onAdded }: { onAdded: () => void }) {
   const [err, setErr] = useState("");
   return (
     <div className="card notice">
-      <p>Add a passkey so you can sign in with Face ID instead of the passphrase.</p>
+      <p>Add a passkey so you can sign in with Face ID instead of your password.</p>
       <button
         className="primary"
         onClick={() =>

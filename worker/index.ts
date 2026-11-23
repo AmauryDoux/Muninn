@@ -78,7 +78,7 @@ async function api(req: Request, env: Env): Promise<Response> {
   }
   if (path === "/api/facts" && m === "POST") return addFact(repo, req);
 
-  // "What I know about you" and everything that edits it need a fresh passkey/passphrase check.
+  // "What I know about you" and everything that edits it need a fresh passkey/password check.
   if (path === "/api/know" && m === "GET") {
     requireFresh(session);
     return knowledge(repo);

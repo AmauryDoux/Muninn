@@ -55,7 +55,7 @@ export class Cipher {
     return enc == null ? null : this.decrypt(enc, aad);
   }
 
-  /** Keyed hash (HMAC-SHA-256), used for the passphrase verifier and IP hashing. */
+  /** Keyed hash (HMAC-SHA-256), used for the password verifier and IP hashing. */
   async mac(data: string): Promise<string> {
     return toB64url(await crypto.subtle.sign("HMAC", this.hmac, utf8(data)));
   }

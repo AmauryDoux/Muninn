@@ -1,4 +1,4 @@
-// Single-user auth: passkeys first, a long passphrase as fallback, opaque session cookies stored hashed.
+// Single-user auth: passkeys first, username + password as fallback, opaque session cookies stored hashed.
 import {
   generateAuthenticationOptions,
   generateRegistrationOptions,
@@ -14,12 +14,12 @@ import { HttpError, clientIp, json, readJson, str } from "./lib/http";
 import { getSetting, setSetting } from "./lib/settings";
 import { ulid } from "./lib/ulid";
 import { isValidTimeZone } from "./core/time";
+import { normalizeUsername, passwordProblem } from "./core/password";
 
 export const COOKIE = "__Host-muninn";
 const CHALLENGE_COOKIE = "__Host-muninn-ch";
 const SESSION_DAYS = 30;
 const REAUTH_MINUTES = 5;
-const MIN_PASSPHRASE = 16;
 const ATTEMPT_WINDOW_MIN = 15;
 const ATTEMPTS_PER_IP = 5;
 const ATTEMPTS_GLOBAL = 20; // stops a slow brute force from many IPs
@@ -120,19 +120,44 @@ async function clearAttempts(env: Env, cipher: Cipher, req: Request): Promise<vo
 }
 
 /**
- * Passphrase verifier: HMAC-SHA-256 keyed by a key derived from DATA_KEY (a pepper held only in Worker secrets).
- * Workers cannot run PBKDF2 above 100,000 iterations, and the free plan allows ~10 ms CPU per request, so a
- * slow hash is not available here. Instead: the verifier is useless without the Worker secret, the passphrase
- * must be long (>= 16 chars), and attempts are rate limited per IP and globally.
+ * Password verifier: HMAC-SHA-256 over username + password, keyed by a key derived from DATA_KEY (a pepper held only
+ * in Worker secrets). Workers cannot run PBKDF2 above 100,000 iterations, and the free plan allows ~10 ms CPU per
+ * request, so a slow hash is not available here. Instead: the verifier is useless without the Worker secret, the
+ * password must be 12+ characters and not trivial, and attempts are rate limited per IP and globally.
  */
-async function passphraseVerifier(cipher: Cipher, passphrase: string): Promise<string> {
-  return cipher.mac(`passphrase:v1:${passphrase.normalize("NFKC")}`);
+async function passwordVerifier(cipher: Cipher, username: string, password: string): Promise<string> {
+  return cipher.mac(`password:v2:${username}:${password.normalize("NFKC")}`);
 }
 
-async function checkPassphrase(env: Env, cipher: Cipher, passphrase: string): Promise<boolean> {
-  const stored = await getSetting(env.DB, "passphrase_verifier");
-  if (!stored) return false;
-  return cipher.macVerify(`passphrase:v1:${passphrase.normalize("NFKC")}`, stored);
+/**
+ * Checks username + password. Installs from before usernames existed only have a passphrase verifier: the first
+ * successful login with the old passphrase sets the username and upgrades the verifier.
+ */
+async function checkPassword(env: Env, cipher: Cipher, usernameRaw: string, password: string): Promise<boolean> {
+  const username = normalizeUsername(usernameRaw) ?? "";
+  const stored = await getSetting(env.DB, "password_verifier");
+  if (stored) {
+    const storedUser = (await getSetting(env.DB, "username")) ?? "";
+    // Always compute the MAC, so a wrong username takes as long as a wrong password.
+    const ok = await cipher.macVerify(`password:v2:${username}:${password.normalize("NFKC")}`, stored);
+    return ok && username === storedUser;
+  }
+  const legacy = await getSetting(env.DB, "passphrase_verifier");
+  if (!legacy || !username) return false;
+  if (!(await cipher.macVerify(`passphrase:v1:${password.normalize("NFKC")}`, legacy))) return false;
+  await env.DB.batch([
+    env.DB.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('username', ?)").bind(username),
+    env.DB.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('password_verifier', ?)").bind(await passwordVerifier(cipher, username, password)),
+    env.DB.prepare("DELETE FROM settings WHERE key = 'passphrase_verifier'"),
+  ]);
+  return true;
+}
+
+/** For re-checks inside a session: the stored username is used. */
+async function checkCurrentPassword(env: Env, cipher: Cipher, password: string): Promise<boolean> {
+  const username = (await getSetting(env.DB, "username")) ?? "";
+  if (!username) return false;
+  return checkPassword(env, cipher, username, password);
 }
 
 async function constantTimeEqual(cipher: Cipher, a: string, b: string): Promise<boolean> {
@@ -140,8 +165,13 @@ async function constantTimeEqual(cipher: Cipher, a: string, b: string): Promise<
   return cipher.macVerify(`cmp:${a}`, await cipher.mac(`cmp:${b}`));
 }
 
-function validatePassphrase(p: string): void {
-  if (p.length < MIN_PASSPHRASE) throw new HttpError(400, "weak_passphrase", `Use at least ${MIN_PASSPHRASE} characters.`);
+function validateCredentials(usernameRaw: unknown, password: unknown): { username: string; password: string } {
+  const username = normalizeUsername(str(usernameRaw, "username", 64));
+  if (!username) throw new HttpError(400, "bad_username", "Use 3 to 64 letters, digits, or . _ - @ +");
+  const p = str(password, "password", 500);
+  const problem = passwordProblem(username, p);
+  if (problem) throw new HttpError(400, "weak_password", problem);
+  return { username, password: p };
 }
 
 async function saveChallenge(env: Env, challenge: string, purpose: string): Promise<string> {
@@ -176,24 +206,25 @@ export async function handleAuth(env: Env, req: Request, path: string, cipher: C
   if (path === "/api/auth/status" && req.method === "GET") {
     const s = await getSession(env, req);
     const pk = await db.prepare("SELECT COUNT(*) AS n FROM passkeys").first<{ n: number }>();
-    return json({ setup_done: setupDone, signed_in: !!s, has_passkey: (pk?.n ?? 0) > 0 });
+    const needsUsername = setupDone && !(await getSetting(db, "username"));
+    return json({ setup_done: setupDone, signed_in: !!s, has_passkey: (pk?.n ?? 0) > 0, needs_username: needsUsername });
   }
 
   if (path === "/api/auth/setup" && req.method === "POST") {
     if (setupDone) throw new HttpError(409, "already_set_up");
     await rateLimit(env, cipher, req);
-    const body = await readJson<{ code?: unknown; passphrase?: unknown; tz?: unknown; name?: unknown }>(req);
+    const body = await readJson<{ code?: unknown; username?: unknown; password?: unknown; tz?: unknown; name?: unknown }>(req);
     const code = str(body.code, "code", 200);
     if (!env.SETUP_CODE || env.SETUP_CODE.length < 16) throw new HttpError(500, "setup_code_missing");
     if (!(await constantTimeEqual(cipher, code, env.SETUP_CODE))) throw new HttpError(401, "bad_code");
-    const passphrase = str(body.passphrase, "passphrase", 500);
-    validatePassphrase(passphrase);
+    const cred = validateCredentials(body.username, body.password);
     const tz = str(body.tz, "tz", 64);
     if (!isValidTimeZone(tz)) throw new HttpError(400, "bad_tz");
     const name = str(body.name, "name", 80, { optional: true }) || "Me";
     const selfId = ulid();
     await db.batch([
-      db.prepare("INSERT INTO settings (key, value) VALUES ('passphrase_verifier', ?)").bind(await passphraseVerifier(cipher, passphrase)),
+      db.prepare("INSERT INTO settings (key, value) VALUES ('username', ?)").bind(cred.username),
+      db.prepare("INSERT INTO settings (key, value) VALUES ('password_verifier', ?)").bind(await passwordVerifier(cipher, cred.username, cred.password)),
       db.prepare("INSERT INTO settings (key, value) VALUES ('tz', ?)").bind(tz),
       db.prepare("INSERT INTO settings (key, value) VALUES ('session_version', '1')"),
       db
@@ -215,8 +246,8 @@ export async function handleAuth(env: Env, req: Request, path: string, cipher: C
 
   if (path === "/api/auth/login" && req.method === "POST") {
     await rateLimit(env, cipher, req);
-    const body = await readJson<{ passphrase?: unknown }>(req);
-    const ok = await checkPassphrase(env, cipher, str(body.passphrase, "passphrase", 500));
+    const body = await readJson<{ username?: unknown; password?: unknown }>(req);
+    const ok = await checkPassword(env, cipher, str(body.username, "username", 64), str(body.password, "password", 500));
     if (!ok) throw new HttpError(401, "bad_credentials");
     await clearAttempts(env, cipher, req);
     return json({ ok: true }, 200, { "Set-Cookie": await createSession(env, req) });
@@ -289,8 +320,8 @@ export async function handleAuth(env: Env, req: Request, path: string, cipher: C
 
   if (path === "/api/auth/reauth" && req.method === "POST") {
     await rateLimit(env, cipher, req);
-    const body = await readJson<{ passphrase?: unknown }>(req);
-    if (!(await checkPassphrase(env, cipher, str(body.passphrase, "passphrase", 500)))) throw new HttpError(401, "bad_credentials");
+    const body = await readJson<{ password?: unknown }>(req);
+    if (!(await checkCurrentPassword(env, cipher, str(body.password, "password", 500)))) throw new HttpError(401, "bad_credentials");
     await clearAttempts(env, cipher, req);
     await markFresh(env, session);
     return json({ ok: true });
@@ -359,13 +390,20 @@ export async function handleAuth(env: Env, req: Request, path: string, cipher: C
     return json({ ok: true });
   }
 
-  if (path === "/api/auth/passphrase" && req.method === "POST") {
+  if (path === "/api/auth/password" && req.method === "POST") {
     requireFresh(session);
-    const body = await readJson<{ passphrase?: unknown }>(req);
-    const p = str(body.passphrase, "passphrase", 500);
-    validatePassphrase(p);
-    await setSetting(db, "passphrase_verifier", await passphraseVerifier(cipher, p));
-    return json({ ok: true });
+    const body = await readJson<{ username?: unknown; password?: unknown }>(req);
+    const cred = validateCredentials(body.username ?? (await getSetting(db, "username")) ?? "", body.password);
+    await db.batch([
+      db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('username', ?)").bind(cred.username),
+      db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('password_verifier', ?)").bind(await passwordVerifier(cipher, cred.username, cred.password)),
+      db.prepare("DELETE FROM settings WHERE key = 'passphrase_verifier'"),
+    ]);
+    return json({ ok: true, username: cred.username });
+  }
+
+  if (path === "/api/auth/username" && req.method === "GET") {
+    return json({ username: await getSetting(db, "username") });
   }
 
   if (path === "/api/auth/logout" && req.method === "POST") {
