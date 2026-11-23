@@ -27,7 +27,7 @@ Worker ──▶ D1 (encrypted columns) · Workers AI (embeddings, Whisper) · A
 - **Model output is data.** Every response is validated against a Zod schema (structured outputs); unknown ids are dropped.
 - **Encrypted at the application layer:** note text, titles, details, attributes, people's names and aliases, fact values, cached briefs. AES-256-GCM, random IV, `table:id:column` as associated data. Not encrypted: ids, times, status, kind, relation, fact keys, place hints, event metadata.
 - **Push payloads carry no item text** ("Reminder: 2 items due").
-- **Sensitive screens** (What I know, export, deletes, new passkeys, passphrase change) need a passkey or password check within 5 minutes.
+- **Sensitive screens** (What I know, export, deletes, new passkeys, password change) need a passkey or password check within 5 minutes.
 
 ## API
 All under `/api`, JSON, same-origin `Origin` required on writes.
