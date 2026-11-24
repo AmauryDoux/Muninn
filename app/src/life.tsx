@@ -94,6 +94,15 @@ export function LifeHome() {
               </a>
             )}
             {g.id === "work" && (
+              <a className="tile" href="#/review">
+                <span className="tint">
+                  <Icon name="calendar" />
+                </span>
+                <span className="name">Weekly review</span>
+                <span className="num">Done, slipped, next</span>
+              </a>
+            )}
+            {g.id === "work" && (
               <a className="tile" href="#/digest">
                 <span className="tint">
                   <Icon name="inbox" />

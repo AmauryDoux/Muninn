@@ -38,6 +38,7 @@ export default defineConfig({
         ],
         shortcuts: [
           { name: "Life", url: "/?view=life", icons: [{ src: "/icons/icon-192.png", sizes: "192x192" }] },
+          { name: "Your week", url: "/?view=review", icons: [{ src: "/icons/icon-192.png", sizes: "192x192" }] },
           { name: "Ideas digest", url: "/?view=digest", icons: [{ src: "/icons/icon-192.png", sizes: "192x192" }] },
         ],
       },

@@ -10,6 +10,7 @@ import { Repo } from "./repo";
 import { pushAll } from "./routes/misc";
 import { buildSnapshot } from "./core/snapshot";
 import { maintainVectors } from "./vectors";
+import { buildReview, codeSummary } from "./routes/review";
 import { embed } from "./ai";
 import { refreshPatterns, refreshTips, refreshWeather } from "./advice";
 import { fireTriggers } from "./engine";
@@ -40,7 +41,7 @@ export async function runScheduled(env: Env, now = new Date()): Promise<void> {
   if (at(3)) await job("patterns", () => refreshPatterns(repo, now, rs.tz));
   if (at(5)) await job("weather", () => refreshWeather(repo));
   if (at(6)) await job("tips", () => refreshTips(repo, now, rs.tz, true));
-  if (p.weekday === 0 && at(18)) await job("digest", () => ideasDigestPush(repo, rs, now));
+  if (p.weekday === 0 && at(18)) await job("review", () => weeklyReviewPush(repo, rs, now));
   if (p.minute < 5) await housekeeping(env, now);
   if (env.BACKUPS && p.weekday === 0 && p.hour === 3 && p.minute < 5) await job("backup", () => backup(repo, now));
   await job("vectors", () => maintainVectors(env, repo.cipher, (t) => embed(env, t)));
@@ -140,6 +141,7 @@ async function housekeeping(env: Env, now: Date) {
     db.prepare("DELETE FROM sessions WHERE expires_at < ?").bind(iso),
     db.prepare("DELETE FROM auth_attempts WHERE at < ?").bind(new Date(now.getTime() - 86400_000).toISOString()),
     db.prepare("DELETE FROM events WHERE type = 'push_failed' AND at < ?").bind(new Date(now.getTime() - 30 * 86400_000).toISOString()),
+    db.prepare("DELETE FROM settings WHERE key LIKE 'review:%' AND key < ?").bind(`review:${new Date(now.getTime() - 60 * 86400_000).toISOString().slice(0, 10)}`),
     db.prepare("DELETE FROM settings WHERE key LIKE 'brief:%' AND key < ?").bind(`brief:${new Date(now.getTime() - 3 * 86400_000).toISOString().slice(0, 10)}`),
     ...expired.map((r) => db.prepare("DELETE FROM settings WHERE key = ?").bind(r.key)),
   ]);
@@ -161,22 +163,21 @@ async function backup(repo: Repo, now: Date) {
   if (old.length) await bucket.delete(old);
 }
 
-/** Sunday evening: one push if ideas were captured this week. Counts toward the daily cap like any push. */
-async function ideasDigestPush(repo: Repo, rs: ReturnType<typeof reminderSettings>, now: Date) {
+/** Sunday evening: the weekly review, as one push (ideas are part of it). Counts toward the daily cap like any push. */
+async function weeklyReviewPush(repo: Repo, rs: ReturnType<typeof reminderSettings>, now: Date) {
   const db = repo.db;
-  const week = await db
-    .prepare("SELECT COUNT(*) AS n FROM items WHERE subtype = 'idea' AND created_at >= ?")
-    .bind(new Date(now.getTime() - 7 * 86400_000).toISOString())
-    .first<{ n: number }>();
-  if (!week?.n || inQuietHours(now, rs.tz, rs.quietStart, rs.quietEnd)) return;
+  if (inQuietHours(now, rs.tz, rs.quietStart, rs.quietEnd)) return;
   const dayStart = startOfLocalDay(civilOf(now, rs.tz), rs.tz).toISOString();
   const sent = await db.prepare("SELECT nudge_type FROM events WHERE type = 'push_sent' AND at >= ?").bind(dayStart).all<{ nudge_type: string }>();
-  if (sent.results.some((r) => r.nudge_type === "digest") || sent.results.length >= rs.dailyCap) return;
-  const delivered = await pushAll(repo, { title: "Your week", body: `${week.n} new idea${week.n > 1 ? "s" : ""} to look over`, url: "/?view=digest", tag: "digest" });
-  if (delivered === 0) return recordPushFailure(db, now.toISOString(), "digest");
+  if (sent.results.some((r) => r.nudge_type === "review") || sent.results.length >= rs.dailyCap) return;
+  const review = await buildReview(repo, now, rs.tz);
+  const c = review.counts;
+  if (!c.done && !c.slipped && !c.coming && !c.ideas) return;
+  const delivered = await pushAll(repo, { title: "Your week", body: codeSummary(c), url: "/#/review", tag: "review" });
+  if (delivered === 0) return recordPushFailure(db, now.toISOString(), "review");
   await db
-    .prepare("INSERT INTO events (id, at, type, nudge_type, payload_json) VALUES (?, ?, 'push_sent', 'digest', ?)")
-    .bind(crypto.randomUUID(), now.toISOString(), JSON.stringify({ items: week.n, devices: delivered }))
+    .prepare("INSERT INTO events (id, at, type, nudge_type, payload_json) VALUES (?, ?, 'push_sent', 'review', ?)")
+    .bind(crypto.randomUUID(), now.toISOString(), JSON.stringify({ devices: delivered }))
     .run();
 }
 

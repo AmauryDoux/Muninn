@@ -38,6 +38,7 @@ import {
   upcoming,
 } from "./routes/life";
 import { runScheduled } from "./scheduled";
+import { getReview } from "./routes/review";
 import { createToken, deleteToken, listTokens, shortcutCapture } from "./routes/tokens";
 
 let cipherCache: { key: string; cipher: Promise<Cipher> } | null = null;
@@ -124,6 +125,7 @@ async function api(req: Request, env: Env): Promise<Response> {
   if (path === "/api/tips" && m === "GET") return getTips(repo, rs.tz);
   if ((mm = path.match(new RegExp(`^/api/tips/${ID}$`))) && m === "POST") return postTip(repo, req, mm[1]);
   if (path === "/api/digest" && m === "GET") return ideasDigest(repo, url, rs.tz);
+  if (path === "/api/review" && m === "GET") return getReview(repo, rs.tz);
 
   // "What I know about you" and everything that edits it need a fresh passkey/password check.
   if (path === "/api/know" && m === "GET") {

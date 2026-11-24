@@ -11,6 +11,7 @@ import { CategoryScreen, Digest, LifeHome, ThingDetail, ThingsScreen } from "./l
 import { Settings } from "./settings";
 import { Tips } from "./tips";
 import { UndoToast } from "./undo";
+import { ReviewScreen } from "./review";
 import { TzBanner, checkTz } from "./tzbanner";
 
 interface Status {
@@ -132,6 +133,7 @@ function Main({ hasPasskey, onSignedOut, onPasskeyAdded }: { hasPasskey: boolean
     loadPeople();
     loadBrief();
     if (initial === "digest") location.hash = "#/digest";
+    if (initial === "review") location.hash = "#/review";
     const flush = () =>
       flushQueue().then((n) => {
         setQueued(queuedCount());
@@ -149,7 +151,7 @@ function Main({ hasPasskey, onSignedOut, onPasskeyAdded }: { hasPasskey: boolean
   }, [loadItems, loadPeople, loadBrief, initial]);
 
   const route = hash.match(/^#\/(item|life|thing)\/([0-9A-Za-z_]{2,40})$/);
-  const sub = route ? { kind: route[1], id: route[2] } : hash === "#/things" ? { kind: "things", id: "" } : hash === "#/digest" ? { kind: "digest", id: "" } : null;
+  const sub = route ? { kind: route[1], id: route[2] } : hash === "#/things" ? { kind: "things", id: "" } : hash === "#/digest" ? { kind: "digest", id: "" } : hash === "#/review" ? { kind: "review", id: "" } : null;
   const back = () => {
     if (history.length > 1) history.back();
     else location.hash = "";
@@ -188,6 +190,8 @@ function Main({ hasPasskey, onSignedOut, onPasskeyAdded }: { hasPasskey: boolean
           <ThingsScreen onBack={back} />
         ) : sub?.kind === "digest" ? (
           <Digest onBack={back} />
+        ) : sub?.kind === "review" ? (
+          <ReviewScreen onBack={back} />
         ) : (
           <>
             {tab === "home" && (
