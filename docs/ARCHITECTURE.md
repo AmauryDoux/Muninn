@@ -1,0 +1,58 @@
+# Architecture
+
+The full design is the v1 spec. This page records how the code maps to it.
+
+```
+phone (PWA, service worker) ──HTTPS, same origin, HttpOnly cookie──▶ Cloudflare Worker
+                                                                     ├─ static assets (dist/client)
+                                                                     ├─ /api/*  (worker/index.ts)
+                                                                     └─ cron */5 (worker/scheduled.ts)
+Worker ──▶ D1 (encrypted columns) · Workers AI (embeddings, Whisper) · Anthropic API · Apple/Google push relays
+```
+
+## Code layout
+| Path | What |
+|---|---|
+| `worker/core/` | Pure logic, no I/O, unit-tested: civil dates (`civil.ts`), RRULE subset (`rrule.ts`), trigger scheduling (`triggers.ts`), categories and their attrs (`categories.ts`), money, streaks, clustering, seasonal + weather signals, patterns, tip rules (`tips.ts`), dates and time references, reminders and push planning, people matching, recall SQL builder, item grouping, cost estimates, model output schemas |
+| `worker/lib/` | Crypto (AES-GCM per field, HMAC), web push (VAPID + RFC 8291), HTTP helpers, settings, ULIDs, usage logging |
+| `worker/auth.ts` | Setup code, username + password, passkeys (SimpleWebAuthn), sessions, rate limits, fresh-check for sensitive screens |
+| `worker/engine.ts` | Life engine I/O: attrs, things, trigger sync and firing, recurring roll-forward |
+| `worker/advice.ts` | Tip refresh/selection, pattern and weather refresh |
+| `worker/ai.ts`, `worker/brief.ts` | Every model call |
+| `worker/routes/` | Capture/recall/advice, items, profile (people, facts, patterns), push, settings, usage, export |
+| `worker/scheduled.ts` | Trigger firing, reminders, morning brief, patterns (03:00), weather (05:00), tips (06:00), ideas digest (Sun 18:00), housekeeping, weekly backup; each job isolated |
+| `app/src/` | React 19 PWA |
+| `migrations/` | D1 schema |
+
+## Rules the code follows
+- **Code computes, the model reads language.** The parser returns a time *reference* ("relative week +1"); `worker/core/time.ts` turns it into dates. Recall gets a filter object; `worker/core/recall.ts` builds parameterised SQL. The model never writes SQL and has no tools.
+- **Model output is data.** Every response is validated against a Zod schema (structured outputs); unknown ids are dropped.
+- **Encrypted at the application layer:** note text, titles, details, attributes, people's names and aliases, fact values, cached briefs. AES-256-GCM, random IV, `table:id:column` as associated data. Not encrypted: ids, times, status, kind, relation, fact keys, place hints, event metadata.
+- **Push payloads carry no item text** ("Reminder: 2 items due").
+- **Sensitive screens** (What I know, export, deletes, new passkeys, password change) need a passkey or password check within 5 minutes.
+
+## API
+All under `/api`, JSON, same-origin `Origin` required on writes.
+
+| Method and path | Auth | Purpose |
+|---|---|---|
+| `GET /auth/status` | none | Setup and sign-in state |
+| `POST /auth/setup` | setup code | First run only |
+| `POST /auth/login` | username + password | Rate limited |
+| `POST /auth/passkey/{login,reauth,register}/{options,verify}` | varies | WebAuthn |
+| `POST /auth/reauth`, `/auth/password`, `/auth/logout`, `/auth/logout-all`, `GET /auth/username` | session | |
+| `POST /capture` | session | Tell or ask: returns a confirmed item or an answer |
+| `POST /transcribe` | session | Audio to text (Whisper) |
+| `GET /items?view=open|done|recent`, `GET|PATCH|DELETE /items/:id`, `POST /items/:id/act` | session (delete: fresh) | |
+| `GET /brief` | session | Today, overdue, one-line summary |
+| `GET|POST /people`, `PATCH|DELETE /people/:id` | session (delete: fresh) | |
+| `POST /facts`, `PATCH|DELETE /facts/:id` | session (edit: fresh) | |
+| `GET /know`, `PATCH /patterns/:id`, `GET /export` | fresh | |
+| `POST /push/{subscribe,unsubscribe,test}`, `GET /devices`, `DELETE /devices/:id` | session | |
+| `GET|PUT /settings`, `GET /usage?month=` | session | |
+| `GET /life`, `GET|POST /life/items?subtype=`, `PATCH /life/items/:id` | session | Categories (attrs replaced whole on PATCH) |
+| `POST /life/seasonal-starter` | session | Adds the seasonal template items |
+| `GET /dates` | session | Upcoming birthdays, anniversaries, expiries |
+| `GET|POST /things`, `GET|PATCH|DELETE /things/:id` | session (delete: fresh) | Home inventory |
+| `GET /tips`, `POST /tips/:id` (`act|snooze|dismiss`) | session | Proactive tips |
+| `GET /digest` | session | Ideas grouped by similarity |

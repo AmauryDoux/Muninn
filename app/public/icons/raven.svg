@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Muninn app icon: a raven in profile against a harvest moon. Rounded, for the favicon and the in-app header. -->
+  <defs>
+    <radialGradient id="sky" cx="50%" cy="38%" r="75%">
+      <stop offset="0" stop-color="#1d2346"/>
+      <stop offset="0.6" stop-color="#0d1024"/>
+      <stop offset="1" stop-color="#05060c"/>
+    </radialGradient>
+    <radialGradient id="moon" cx="42%" cy="38%" r="70%">
+      <stop offset="0" stop-color="#fff1c7"/>
+      <stop offset="0.55" stop-color="#f1c45e"/>
+      <stop offset="1" stop-color="#c98a2e"/>
+    </radialGradient>
+    <linearGradient id="feather" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#20263f"/>
+      <stop offset="1" stop-color="#06070c"/>
+    </linearGradient>
+    <linearGradient id="sheen" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#8f9cff" stop-opacity="0"/>
+      <stop offset="0.5" stop-color="#a8b2ff" stop-opacity="0.85"/>
+      <stop offset="1" stop-color="#c08cff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <clipPath id="r"><rect width="512" height="512" rx="114"/></clipPath><g clip-path="url(#r)"><rect width="512" height="512" fill="url(#sky)"/>
+  <circle cx="300" cy="226" r="172" fill="url(#moon)"/>
+  <circle cx="300" cy="226" r="172" fill="none" stroke="#fff3d1" stroke-opacity="0.35" stroke-width="3"/>
+  <!-- raven, perched, facing left: sloping forehead into a heavy beak, shaggy throat, folded wing -->
+  <path fill="url(#feather)" d="M74 262 C118 236 168 192 214 168 C250 140 312 136 348 160 C382 182 394 214 400 242 C424 306 470 384 512 446 L512 512 L198 512 C194 440 206 382 238 332 L222 324 L232 312 L212 308 L224 296 L204 292 L214 280 L196 276 L202 268 C160 272 118 270 74 262 Z"/>
+  <path fill="#171c33" d="M296 300 C366 314 436 384 486 512 L420 512 C398 420 356 352 296 300 Z"/>
+  <path fill="none" stroke="#2c3459" stroke-width="4" stroke-linecap="round" d="M330 330 C380 370 418 430 440 512 M310 316 C350 356 380 420 396 512"/>
+  <path fill="none" stroke="#000" stroke-opacity="0.6" stroke-width="5" stroke-linecap="round" d="M84 262 C130 258 170 258 204 264"/>
+  <path fill="none" stroke="#3a4266" stroke-width="4" stroke-linecap="round" d="M176 206 L210 218"/>
+  <path fill="none" stroke="url(#sheen)" stroke-width="7" stroke-linecap="round" d="M226 160 C272 136 332 140 374 180"/>
+  <path fill="none" stroke="url(#sheen)" stroke-width="5" stroke-linecap="round" opacity="0.55" d="M402 260 C430 320 464 380 500 440"/>
+  <circle cx="258" cy="198" r="14" fill="#f6cf6a"/>
+  <circle cx="258" cy="198" r="7" fill="#05060c"/>
+  <circle cx="254" cy="194" r="3" fill="#fff8e1"/>
+</g>
+</svg>

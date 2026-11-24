@@ -1,0 +1,6 @@
+# Copy to .dev.vars for `wrangler dev`. Never commit .dev.vars.
+# Generate values with: npm run gen:secrets
+ANTHROPIC_API_KEY=
+DATA_KEY=
+VAPID_PRIVATE_KEY=
+SETUP_CODE=

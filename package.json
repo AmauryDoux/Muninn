@@ -1,0 +1,41 @@
+{
+  "name": "muninn",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "dev:worker": "npm run build && wrangler dev",
+    "build": "vite build",
+    "typecheck": "tsc -p tsconfig.app.json --noEmit && tsc -p tsconfig.worker.json --noEmit",
+    "lint": "oxlint app worker test",
+    "test": "vitest run",
+    "db:migrate:local": "wrangler d1 migrations apply muninn --local",
+    "db:migrate:remote": "wrangler d1 migrations apply muninn --remote",
+    "deploy": "npm run build && wrangler deploy",
+    "gen:secrets": "node scripts/gen-secrets.mjs"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^1.13.0",
+    "@simplewebauthn/browser": "^14.0.0",
+    "@simplewebauthn/server": "^14.1.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "workbox-precaching": "^7.4.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261123.1",
+    "@types/node": "^26.6.6",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.3.0",
+    "http_ece": "^1.2.1",
+    "oxlint": "^1.95.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.8",
+    "vite-plugin-pwa": "^2.0.0",
+    "vitest": "^5.1.1",
+    "wrangler": "^4.167.0"
+  }
+}
