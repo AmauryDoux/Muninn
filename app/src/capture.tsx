@@ -135,7 +135,7 @@ export function CaptureBox({ people, onCaptured }: { people: Person[]; onCapture
           )}
           {result?.type === "queued" && (
             <div className="card">
-              <p className="muted">Offline. Saved on this phone; it sends when you're back online.</p>
+              <p className="muted">Couldn't reach Muninn. Saved on this phone; it sends by itself later.</p>
               <button className="btn ghost" onClick={() => setResult(null)}>
                 OK
               </button>

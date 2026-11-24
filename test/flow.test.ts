@@ -158,3 +158,31 @@ describe("advice", () => {
     expect(b.ai_error).toContain("500");
   });
 });
+
+describe("notes sent late from the offline queue", () => {
+  it("'tomorrow' counts from when the note was typed, not when it arrived", async () => {
+    reply = () => capture({ kind: "task", title: "Call mom", when: { ...noTime, type: "relative", unit: "day", offset: 1 } });
+    const typed = new Date(Date.now() - 2 * 86400_000);
+    const r = new Request("https://m.test/api/capture", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: "https://m.test" },
+      body: JSON.stringify({ text: "call mom tomorrow", client_id: "q1", captured_at: typed.toISOString() }),
+    });
+    const b = (await (await handleCapture(repo, r, TZ)).json()) as Record<string, any>;
+    const start = new Date(b.item.window_start).getTime();
+    // The day after it was typed: about a day after `typed`, so already in the past now.
+    expect(start).toBeGreaterThan(typed.getTime());
+    expect(start).toBeLessThan(Date.now() - 12 * 3600_000);
+    expect(b.item.created_at).toBe(typed.toISOString());
+  });
+
+  it("bounds the capture time", async () => {
+    const { captureTime } = await import("../worker/routes/capture");
+    const now = new Date("2026-11-24T12:00:00Z");
+    expect(captureTime(undefined, now)).toEqual(now);
+    expect(captureTime("garbage", now)).toEqual(now);
+    expect(captureTime("2026-11-25T12:00:00Z", now)).toEqual(now); // future
+    expect(captureTime("2026-11-24T11:58:00Z", now).toISOString()).toBe("2026-11-24T11:58:00.000Z");
+    expect(captureTime("2026-01-01T00:00:00Z", now).toISOString()).toBe("2026-11-10T12:00:00.000Z"); // 14 days max
+  });
+});
