@@ -222,20 +222,30 @@ export async function handleAuth(env: Env, req: Request, path: string, cipher: C
     if (!isValidTimeZone(tz)) throw new HttpError(400, "bad_tz");
     const name = str(body.name, "name", 80, { optional: true }) || "Me";
     const selfId = ulid();
+    // Setup must also work on a database where the login was reset by hand (setup_done deleted) but other settings
+    // and the "self" person are still there. Plain INSERTs on those keys hit the settings primary key and fail.
+    const upsert = "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value";
     await db.batch([
-      db.prepare("INSERT INTO settings (key, value) VALUES ('username', ?)").bind(cred.username),
-      db.prepare("INSERT INTO settings (key, value) VALUES ('password_verifier', ?)").bind(await passwordVerifier(cipher, cred.username, cred.password)),
-      db.prepare("INSERT INTO settings (key, value) VALUES ('tz', ?)").bind(tz),
-      db.prepare("INSERT INTO settings (key, value) VALUES ('session_version', '1')"),
+      db.prepare(upsert).bind("username", cred.username),
+      db.prepare(upsert).bind("password_verifier", await passwordVerifier(cipher, cred.username, cred.password)),
+      db.prepare("DELETE FROM settings WHERE key = 'passphrase_verifier'"),
+      db.prepare(upsert).bind("tz", tz),
+      // Keep an existing version; old sessions are dropped below.
+      db.prepare("INSERT OR IGNORE INTO settings (key, value) VALUES ('session_version', '1')"),
+      db.prepare("DELETE FROM sessions"),
+      // One "self" person only: keep the existing one (and the facts linked to it) on a re-setup.
       db
-        .prepare("INSERT INTO people (id, name_enc, aliases_enc, relation, created_at) VALUES (?, ?, ?, 'self', ?)")
+        .prepare(
+          "INSERT INTO people (id, name_enc, aliases_enc, relation, created_at) SELECT ?, ?, ?, 'self', ? WHERE NOT EXISTS (SELECT 1 FROM people WHERE relation = 'self')",
+        )
         .bind(
           selfId,
           await cipher.encrypt(name, `people:${selfId}:name`),
           await cipher.encrypt(JSON.stringify(["me"]), `people:${selfId}:aliases`),
           new Date().toISOString(),
         ),
-      // Last, and conditional, so two racing setup calls cannot both succeed.
+      // Last, and a plain INSERT on purpose: if two setup calls race, the second hits the primary key here and its
+      // whole batch (one transaction) rolls back.
       db.prepare("INSERT INTO settings (key, value) VALUES ('setup_done', '1')"),
     ]);
     await clearAttempts(env, cipher, req);
