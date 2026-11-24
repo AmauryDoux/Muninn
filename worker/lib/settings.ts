@@ -33,6 +33,7 @@ export const USER_SETTING_KEYS = [
   "tips_ai",
   "push_titles",
   "ai_budget_usd",
+  "tz_follow",
 ] as const;
 
 export function reminderSettings(m: Map<string, string>): ReminderSettings {

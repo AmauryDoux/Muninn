@@ -110,6 +110,7 @@ export async function getSettings(repo: Repo): Promise<Response> {
     tips_ai: "0",
     push_titles: "1",
     ai_budget_usd: String(DEFAULT_AI_BUDGET_USD),
+    tz_follow: "0",
   };
   for (const k of USER_SETTING_KEYS) out[k] = m.get(k) ?? defaults[k] ?? null;
   return json({ settings: out, vapid_public_key: repo.env.VAPID_PUBLIC_KEY || null, vectorize: !!repo.env.VECTORIZE });
@@ -140,7 +141,7 @@ export async function putSettings(repo: Repo, req: Request): Promise<Response> {
     } else if (k === "ai_budget_usd") {
       const n = Number(s);
       if (!/^\d+(\.\d{1,2})?$/.test(s) || n < 0.1 || n > 100) throw new HttpError(400, "bad_ai_budget_usd", "Use an amount from 0.10 to 100.");
-    } else if (k === "tips_enabled" || k === "tips_ai" || k === "push_titles") {
+    } else if (k === "tips_enabled" || k === "tips_ai" || k === "push_titles" || k === "tz_follow") {
       if (s !== "0" && s !== "1") throw new HttpError(400, `bad_${k}`);
     } else if (!HHMM.test(s)) throw new HttpError(400, `bad_${k}`);
     await setSetting(repo.db, k, val);

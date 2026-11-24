@@ -139,6 +139,12 @@ export function Settings({ onSignedOut }: { onSignedOut: () => void }) {
       <form className="card" onSubmit={save}>
         <h3>Preferences</h3>
         {field("tz", "Time zone (IANA, e.g. Europe/Paris)")}
+        <Toggle
+          on={form.tz_follow === "1"}
+          label="Follow this phone's time zone"
+          hint="When you travel, reminders move to local time the next time you open Muninn."
+          onToggle={() => setForm({ ...form, tz_follow: form.tz_follow === "1" ? "0" : "1" })}
+        />
         <div className="row">
           {field("quiet_start", "Quiet from", "time")}
           {field("quiet_end", "Quiet until", "time")}

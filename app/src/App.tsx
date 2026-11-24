@@ -11,6 +11,7 @@ import { CategoryScreen, Digest, LifeHome, ThingDetail, ThingsScreen } from "./l
 import { Settings } from "./settings";
 import { Tips } from "./tips";
 import { UndoToast } from "./undo";
+import { TzBanner, checkTz } from "./tzbanner";
 
 interface Status {
   setup_done: boolean;
@@ -95,6 +96,7 @@ function Main({ hasPasskey, onSignedOut, onPasskeyAdded }: { hasPasskey: boolean
   const [people, setPeople] = useState<Person[]>([]);
   const [brief, setBrief] = useState<Brief | null>(null);
   const [queued, setQueued] = useState(queuedCount());
+  const [tzOffer, setTzOffer] = useState<{ zone: string; saved: string } | null>(null);
   const hash = useHash();
   const loaded = useRef(false);
 
@@ -121,7 +123,11 @@ function Main({ hasPasskey, onSignedOut, onPasskeyAdded }: { hasPasskey: boolean
   useEffect(() => {
     if (loaded.current) return;
     loaded.current = true;
-    api<{ settings: Record<string, string | null> }>("/api/settings").then((r) => setTz(r.settings.tz));
+    api<{ settings: Record<string, string | null> }>("/api/settings").then(async (r) => {
+      setTz(r.settings.tz);
+      const zone = await checkTz(r.settings);
+      if (zone && r.settings.tz) setTzOffer({ zone, saved: r.settings.tz });
+    });
     loadItems();
     loadPeople();
     loadBrief();
@@ -187,6 +193,17 @@ function Main({ hasPasskey, onSignedOut, onPasskeyAdded }: { hasPasskey: boolean
             {tab === "home" && (
               <>
                 {!hasPasskey && <PasskeyNudge onAdded={onPasskeyAdded} />}
+                {tzOffer && (
+                  <TzBanner
+                    zone={tzOffer.zone}
+                    saved={tzOffer.saved}
+                    onDone={() => {
+                      setTzOffer(null);
+                      loadItems();
+                      loadBrief();
+                    }}
+                  />
+                )}
                 {brief && (
                   <section className="card">
                     <p className="brief">{brief.summary}</p>
