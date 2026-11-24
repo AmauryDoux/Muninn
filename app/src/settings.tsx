@@ -3,6 +3,7 @@ import { api } from "./api";
 import { PasswordHint, errText, registerPasskey } from "./auth";
 import { ago, setTz } from "./fmt";
 import { Health } from "./health";
+import { Sessions } from "./sessions";
 import { Icon } from "./icons";
 
 interface SettingsResp {
@@ -178,6 +179,7 @@ export function Settings({ onSignedOut }: { onSignedOut: () => void }) {
         </ul>
         <button className="btn" onClick={addPasskey}>Add a passkey</button>
         <ChangePassword onMsg={setMsg} />
+        <Sessions hasPasskey={passkeys.length > 0} onMsg={setMsg} />
         <div className="row">
           <button className="btn" onClick={() => api("/api/auth/logout", { method: "POST", body: {} }).then(onSignedOut)}>Sign out</button>
           <button className="btn danger" onClick={() => confirm("Sign out every device?") && api("/api/auth/logout-all", { method: "POST", body: {} }).then(onSignedOut)}>

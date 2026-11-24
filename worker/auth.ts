@@ -43,6 +43,30 @@ function cookie(name: string, value: string, maxAge: number): string {
   return `${name}=${value}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${maxAge}`;
 }
 
+async function passwordLoginOff(db: D1Database): Promise<boolean> {
+  return (await getSetting(db, "password_login")) === "0";
+}
+
+/** "iPhone, Safari": enough to recognise a device, from the stored User-Agent. */
+export function deviceName(ua: string | null): string {
+  if (!ua) return "Unknown device";
+  const os = /iPhone/.test(ua) ? "iPhone" : /iPad/.test(ua) ? "iPad" : /Android/.test(ua) ? "Android" : /Mac OS X/.test(ua) ? "Mac" : /Windows/.test(ua) ? "Windows" : /Linux/.test(ua) ? "Linux" : "Device";
+  const app = /CriOS|Chrome\//.test(ua) ? "Chrome" : /FxiOS|Firefox\//.test(ua) ? "Firefox" : /Safari\//.test(ua) ? "Safari" : /Mobile\//.test(ua) ? "Home Screen app" : "browser";
+  return `${os}, ${app}`;
+}
+
+/** Push to existing devices when a new session starts, so a sign-in you didn't make doesn't go unnoticed. */
+async function notifySignIn(env: Env, cipher: Cipher, req: Request, how: string): Promise<void> {
+  try {
+    const { pushAll } = await import("./routes/misc");
+    const { Repo } = await import("./repo");
+    const repo = new Repo(env, cipher, "UTC");
+    await pushAll(repo, { title: "New sign-in", body: `${deviceName(req.headers.get("User-Agent"))} signed in with ${how}. Not you? Settings, Sign-in, sign it out.`, url: "/?view=settings", tag: "signin" });
+  } catch (e) {
+    console.warn("sign-in notice failed", e instanceof Error ? e.message : e);
+  }
+}
+
 async function sessionVersion(db: D1Database): Promise<number> {
   return Number((await getSetting(db, "session_version")) ?? "1");
 }
@@ -244,7 +268,7 @@ export async function handleAuth(env: Env, req: Request, path: string, cipher: C
     const s = await getSession(env, req);
     const pk = await db.prepare("SELECT COUNT(*) AS n FROM passkeys").first<{ n: number }>();
     const needsUsername = setupDone && !(await getSetting(db, "username"));
-    return json({ setup_done: setupDone, signed_in: !!s, has_passkey: (pk?.n ?? 0) > 0, needs_username: needsUsername });
+    return json({ setup_done: setupDone, signed_in: !!s, has_passkey: (pk?.n ?? 0) > 0, needs_username: needsUsername, password_login: !(await passwordLoginOff(db)) });
   }
 
   if (path === "/api/auth/setup" && req.method === "POST") {
@@ -286,12 +310,15 @@ export async function handleAuth(env: Env, req: Request, path: string, cipher: C
       db.prepare("INSERT INTO settings (key, value) VALUES ('setup_done', '1')"),
     ]);
     await clearAttempts(env, cipher, req);
-    return json({ ok: true }, 200, { "Set-Cookie": await createSession(env, req) });
+    const setCookie = await createSession(env, req);
+    await notifySignIn(env, cipher, req, "password");
+    return json({ ok: true }, 200, { "Set-Cookie": setCookie });
   }
 
   if (!setupDone) throw new HttpError(409, "setup_required");
 
   if (path === "/api/auth/login" && req.method === "POST") {
+    if (await passwordLoginOff(db)) throw new HttpError(403, "password_login_off", "Password sign-in is off. Use your passkey.");
     await rateLimit(env, cipher, req);
     const body = await readJson<{ username?: unknown; password?: unknown }>(req);
     const ok = await checkPassword(env, cipher, str(body.username, "username", 64), str(body.password, "password", 500));
@@ -360,6 +387,7 @@ export async function handleAuth(env: Env, req: Request, path: string, cipher: C
     await clearAttempts(env, cipher, req);
     const headers = new Headers();
     headers.append("Set-Cookie", await createSession(env, req));
+    await notifySignIn(env, cipher, req, "passkey");
     headers.append("Set-Cookie", clearChallenge);
     return json({ ok: true }, 200, headers);
   }
@@ -374,6 +402,7 @@ export async function handleAuth(env: Env, req: Request, path: string, cipher: C
   }
 
   if (path === "/api/auth/reauth" && req.method === "POST") {
+    if (await passwordLoginOff(db)) throw new HttpError(403, "password_login_off", "Password sign-in is off. Use your passkey.");
     await rateLimit(env, cipher, req);
     const body = await readJson<{ password?: unknown }>(req);
     if (!(await checkCurrentPassword(env, cipher, str(body.password, "password", 500)))) throw new HttpError(401, "bad_credentials");
@@ -461,6 +490,44 @@ export async function handleAuth(env: Env, req: Request, path: string, cipher: C
 
   if (path === "/api/auth/username" && req.method === "GET") {
     return json({ username: await getSetting(db, "username") });
+  }
+
+  if (path === "/api/auth/sessions" && req.method === "GET") {
+    const { results } = await db
+      .prepare("SELECT id_hash, created_at, last_seen_at, user_agent FROM sessions WHERE expires_at > ? AND version = ? ORDER BY last_seen_at DESC")
+      .bind(new Date().toISOString(), await sessionVersion(db))
+      .all<{ id_hash: string; created_at: string; last_seen_at: string; user_agent: string | null }>();
+    return json({
+      sessions: results.map((r) => ({
+        // The id is a hash of the cookie, never the cookie: showing it to the signed-in owner gives nothing away.
+        id: r.id_hash,
+        device: deviceName(r.user_agent),
+        created_at: r.created_at,
+        last_seen_at: r.last_seen_at,
+        current: r.id_hash === session.idHash,
+      })),
+    });
+  }
+
+  if (path.startsWith("/api/auth/sessions/") && req.method === "DELETE") {
+    requireFresh(session);
+    const id = path.slice("/api/auth/sessions/".length);
+    if (!/^[A-Za-z0-9_-]{20,100}$/.test(id)) throw new HttpError(400, "bad_request");
+    await db.prepare("DELETE FROM sessions WHERE id_hash = ?").bind(id).run();
+    return json({ ok: true });
+  }
+
+  if (path === "/api/auth/password-login" && req.method === "POST") {
+    requireFresh(session);
+    const body = await readJson<{ enabled?: unknown }>(req);
+    if (body.enabled === false) {
+      const pk = await db.prepare("SELECT COUNT(*) AS n FROM passkeys").first<{ n: number }>();
+      if (!pk?.n) throw new HttpError(409, "no_passkey", "Add a passkey first, or you'd lock yourself out.");
+      await setSetting(db, "password_login", "0");
+    } else {
+      await db.prepare("DELETE FROM settings WHERE key = 'password_login'").run();
+    }
+    return json({ ok: true, password_login: body.enabled !== false });
   }
 
   if (path === "/api/auth/logout" && req.method === "POST") {

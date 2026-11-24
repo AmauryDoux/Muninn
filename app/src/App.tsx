@@ -92,7 +92,7 @@ function greeting(): string {
 
 function Main({ hasPasskey, onSignedOut, onPasskeyAdded }: { hasPasskey: boolean; onSignedOut: () => void; onPasskeyAdded: () => void }) {
   const initial = new URLSearchParams(location.search).get("view");
-  const [tab, setTab] = useState<Tab>(initial === "upcoming" ? "upcoming" : initial === "life" ? "life" : "home");
+  const [tab, setTab] = useState<Tab>(initial === "upcoming" ? "upcoming" : initial === "life" ? "life" : initial === "settings" ? "settings" : "home");
   const [items, setItems] = useState<Item[]>([]);
   const [people, setPeople] = useState<Person[]>([]);
   const [brief, setBrief] = useState<Brief | null>(null);
