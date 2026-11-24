@@ -1,7 +1,7 @@
 // People, facts and patterns: the "What I know about you" screen.
 import { cleanRelation } from "../core/people";
 import { HttpError, json, readJson, str } from "../lib/http";
-import { addFactSmart, syncFactTriggers } from "../engine";
+import { addFactSmart, syncFactTriggers, syncItemTriggers } from "../engine";
 import type { Repo } from "../repo";
 
 function aliasesFrom(v: unknown): string[] {
@@ -36,18 +36,79 @@ export async function patchPerson(repo: Repo, req: Request, id: string): Promise
   return json({ person: p });
 }
 
-export async function deletePerson(repo: Repo, id: string): Promise<Response> {
+export async function deletePerson(repo: Repo, id: string, tz: string): Promise<Response> {
   const p = (await repo.people()).find((x) => x.id === id);
   if (!p) throw new HttpError(404, "not_found");
   if (p.relation === "self") throw new HttpError(400, "cannot_delete_self");
+  const affected = await itemsOf(repo, id);
   await repo.db.batch([
     repo.db.prepare("UPDATE items SET for_person_id = NULL WHERE for_person_id = ?").bind(id),
     repo.db.prepare("UPDATE items SET requested_by_person_id = NULL WHERE requested_by_person_id = ?").bind(id),
     repo.db.prepare("DELETE FROM triggers WHERE anchor_type = 'fact' AND anchor_id IN (SELECT id FROM facts WHERE subject_type = 'person' AND subject_id = ?)").bind(id),
     repo.db.prepare("DELETE FROM facts WHERE subject_type = 'person' AND subject_id = ?").bind(id),
+    repo.db.prepare("DELETE FROM links WHERE target_type = 'person' AND target_id = ?").bind(id),
     repo.db.prepare("DELETE FROM people WHERE id = ?").bind(id),
   ]);
+  // Item triggers carry the person in their payload ("Emma's recital"): rebuild them, or a firing would point at a
+  // person who no longer exists.
+  await resyncItems(repo, affected, tz);
   return json({ ok: true });
+}
+
+async function itemsOf(repo: Repo, personId: string): Promise<string[]> {
+  const { results } = await repo.db
+    .prepare("SELECT id FROM items WHERE for_person_id = ? OR requested_by_person_id = ?")
+    .bind(personId, personId)
+    .all<{ id: string }>();
+  return results.map((r) => r.id);
+}
+
+async function resyncItems(repo: Repo, ids: string[], tz: string): Promise<void> {
+  for (const id of ids) {
+    const row = await repo.getItemRow(id);
+    if (row?.subtype) await syncItemTriggers(repo, row, tz);
+  }
+}
+
+/**
+ * Merge a duplicate into the person to keep ("the plumber" into "Mike"): their items, facts and links move over,
+ * their name and aliases become aliases, and date reminders are rebuilt for the kept person.
+ */
+export async function mergePerson(repo: Repo, req: Request, fromId: string, tz: string): Promise<Response> {
+  const b = await readJson<{ into?: unknown }>(req);
+  const intoId = str(b.into, "into", 40);
+  const people = await repo.people();
+  const from = people.find((x) => x.id === fromId);
+  const into = people.find((x) => x.id === intoId);
+  if (!from || !into) throw new HttpError(404, "not_found");
+  if (from.id === into.id) throw new HttpError(400, "same_person");
+  if (from.relation === "self") throw new HttpError(400, "cannot_merge_self");
+  const affected = await itemsOf(repo, from.id);
+  await repo.db.batch([
+    repo.db.prepare("UPDATE items SET for_person_id = ? WHERE for_person_id = ?").bind(into.id, from.id),
+    repo.db.prepare("UPDATE items SET requested_by_person_id = ? WHERE requested_by_person_id = ?").bind(into.id, from.id),
+    repo.db.prepare("UPDATE facts SET subject_id = ? WHERE subject_type = 'person' AND subject_id = ?").bind(into.id, from.id),
+    repo.db.prepare("UPDATE OR IGNORE links SET target_id = ? WHERE target_type = 'person' AND target_id = ?").bind(into.id, from.id),
+    repo.db.prepare("DELETE FROM links WHERE target_type = 'person' AND target_id = ?").bind(from.id),
+    repo.db.prepare("DELETE FROM people WHERE id = ?").bind(from.id),
+  ]);
+  into.aliases = [...new Set([...into.aliases, ...from.aliases, from.name.toLowerCase()])]
+    .filter((a) => a && a !== into.name.toLowerCase())
+    .slice(0, 20);
+  if (into.relation === "other" && from.relation !== "other") into.relation = from.relation;
+  await repo.updatePerson(into);
+  // Date facts (birthdays) now belong to the kept person: rebuild their reminders with the right name.
+  const { results: facts } = await repo.db
+    .prepare("SELECT id, key, value_enc FROM facts WHERE subject_type = 'person' AND subject_id = ? AND active = 1 ORDER BY created_at")
+    .bind(into.id)
+    .all<{ id: string; key: string; value_enc: string }>();
+  const latest = new Map(facts.map((f) => [f.key, f]));
+  for (const f of latest.values()) {
+    const value = await repo.cipher.decrypt(f.value_enc, `facts:${f.id}:value`);
+    await syncFactTriggers(repo, { id: f.id, subjectType: "person", subjectId: into.id, key: f.key, value }, tz);
+  }
+  await resyncItems(repo, affected, tz);
+  return json({ person: into, moved_items: affected.length, moved_facts: facts.length });
 }
 
 /** Everything Muninn knows, with source and date. Needs a fresh check (see router). */

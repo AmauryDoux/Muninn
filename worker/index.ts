@@ -20,7 +20,7 @@ import {
   transcribeAudio,
   unsubscribePush,
 } from "./routes/misc";
-import { addFact, createPerson, deleteFact, deletePerson, knowledge, listPeople, patchFact, patchPattern, patchPerson } from "./routes/profile";
+import { addFact, createPerson, deleteFact, deletePerson, knowledge, listPeople, mergePerson, patchFact, patchPattern, patchPerson } from "./routes/profile";
 import {
   addSeasonalStarter,
   createLifeItem,
@@ -98,9 +98,10 @@ async function api(req: Request, env: Env): Promise<Response> {
     if (m === "PATCH") return patchPerson(repo, req, mm[1]);
     if (m === "DELETE") {
       requireFresh(session);
-      return deletePerson(repo, mm[1]);
+      return deletePerson(repo, mm[1], rs.tz);
     }
   }
+  if ((mm = path.match(new RegExp(`^/api/people/${ID}/merge$`))) && m === "POST") return mergePerson(repo, req, mm[1], rs.tz);
   if (path === "/api/facts" && m === "POST") return addFact(repo, req, rs.tz);
 
   // Life: categories, dates, things, tips, digest.
