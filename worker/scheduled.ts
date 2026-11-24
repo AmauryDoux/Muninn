@@ -7,12 +7,15 @@ import { Cipher } from "./lib/crypto";
 import { getSettingsMap, reminderSettings } from "./lib/settings";
 import { utf8 } from "./lib/b64";
 import { Repo } from "./repo";
-import { buildExport, pushAll } from "./routes/misc";
+import { pushAll } from "./routes/misc";
+import { buildSnapshot } from "./core/snapshot";
+import { maintainVectors } from "./vectors";
+import { embed } from "./ai";
 import { refreshPatterns, refreshTips, refreshWeather } from "./advice";
 import { fireTriggers } from "./engine";
 import { inQuietHours } from "./core/time";
 import { briefNotice, reminderNotice } from "./core/notify";
-import { getSetting } from "./lib/settings";
+import { getSetting, setSetting } from "./lib/settings";
 
 export async function runScheduled(env: Env, now = new Date()): Promise<void> {
   const settings = await getSettingsMap(env.DB);
@@ -39,7 +42,10 @@ export async function runScheduled(env: Env, now = new Date()): Promise<void> {
   if (at(6)) await job("tips", () => refreshTips(repo, now, rs.tz, true));
   if (p.weekday === 0 && at(18)) await job("digest", () => ideasDigestPush(repo, rs, now));
   if (p.minute < 5) await housekeeping(env, now);
-  if (env.BACKUPS && p.weekday === 0 && p.hour === 3 && p.minute < 5) await backup(repo, now);
+  if (env.BACKUPS && p.weekday === 0 && p.hour === 3 && p.minute < 5) await job("backup", () => backup(repo, now));
+  await job("vectors", () => maintainVectors(env, repo.cipher, (t) => embed(env, t)));
+  // Heartbeat for the health view: a cron that stopped is otherwise invisible until a reminder is missed.
+  await job("heartbeat", () => setSetting(env.DB, "cron_last_run", now.toISOString()));
 }
 
 async function reminders(repo: Repo, rs: ReturnType<typeof reminderSettings>, now: Date) {
@@ -139,13 +145,17 @@ async function housekeeping(env: Env, now: Date) {
   ]);
 }
 
-/** Weekly encrypted export to R2, kept 8 weeks. Same format as the in-app export, sealed with DATA_KEY. */
+/**
+ * Weekly backup to R2, kept 8 weeks: a raw snapshot of the tables (see core/snapshot.ts), sealed with DATA_KEY and
+ * the object name. Restore with scripts/restore.mjs. Raw rows need no decryption here, so it stays cheap on CPU.
+ */
 async function backup(repo: Repo, now: Date) {
   const bucket = repo.env.BACKUPS!;
   const name = `backup-${now.toISOString().slice(0, 10)}.json.enc`;
   if (await bucket.head(name)) return;
-  const data = utf8(JSON.stringify(await buildExport(repo)));
+  const data = utf8(JSON.stringify(await buildSnapshot(repo.db, now)));
   await bucket.put(name, await repo.cipher.sealBytes(data, name));
+  await setSetting(repo.db, "backup_last", now.toISOString());
   const list = await bucket.list({ prefix: "backup-" });
   const old = list.objects.map((o) => o.key).sort().slice(0, -8);
   if (old.length) await bucket.delete(old);

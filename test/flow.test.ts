@@ -186,3 +186,18 @@ describe("notes sent late from the offline queue", () => {
     expect(captureTime("2026-01-01T00:00:00Z", now).toISOString()).toBe("2026-11-10T12:00:00.000Z"); // 14 days max
   });
 });
+
+describe("AI budget", () => {
+  it("past the monthly budget, a note is still saved, without calling the model", async () => {
+    await repo.db.prepare("INSERT INTO settings (key, value) VALUES ('ai_budget_usd', '0.10')").run();
+    await repo.db
+      .prepare("INSERT INTO events (id, at, type, payload_json) VALUES ('u1', ?, 'model_usage', ?)")
+      .bind(new Date().toISOString(), JSON.stringify({ job: "parse", usd: 0.11 }))
+      .run();
+    const b = await send("buy milk");
+    expect(calls).toHaveLength(0);
+    expect(b.type).toBe("capture");
+    expect(b.item.title).toBe("buy milk");
+    expect(b.ai_error).toMatch(/budget/);
+  });
+});

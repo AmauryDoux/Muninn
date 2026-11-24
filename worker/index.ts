@@ -10,6 +10,7 @@ import {
   exportAll,
   getBrief,
   getSettings,
+  getHealth,
   getUsage,
   listDevices,
   deleteDevice,
@@ -161,6 +162,7 @@ async function api(req: Request, env: Env): Promise<Response> {
   if (path === "/api/devices" && m === "GET") return listDevices(repo);
   if ((mm = path.match(new RegExp(`^/api/devices/${ID}$`))) && m === "DELETE") return deleteDevice(repo, mm[1]);
   if (path === "/api/usage" && m === "GET") return getUsage(repo, url);
+  if (path === "/api/health" && m === "GET") return getHealth(repo);
   if (path === "/api/settings" && m === "GET") return getSettings(repo);
   if (path === "/api/settings" && m === "PUT") return putSettings(repo, req);
 

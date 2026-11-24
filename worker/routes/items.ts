@@ -116,6 +116,10 @@ export async function patchItem(repo: Repo, req: Request, id: string, tz: string
   sets.push("updated_at = ?");
   params.push(new Date().toISOString());
   await repo.db.prepare(`UPDATE items SET ${sets.join(", ")} WHERE id = ?`).bind(...params, id).run();
+  // New wording: drop the old search vector; the cron re-embeds the item from its current text within minutes.
+  if ((p.title !== undefined || p.details !== undefined) && row.capture_id) {
+    await repo.db.prepare("DELETE FROM capture_vectors WHERE capture_id = ?").bind(row.capture_id).run();
+  }
   // Dates and people feed category triggers ("prepare 7 days before the recital").
   if (row.subtype) await syncItemTriggers(repo, (await repo.getItemRow(id))!, tz);
   const fields = Object.keys(before).filter((k) => !k.startsWith("reminded_") && k !== "title_enc" && k !== "details_enc");

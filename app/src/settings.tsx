@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "./api";
 import { PasswordHint, errText, registerPasskey } from "./auth";
 import { ago, setTz } from "./fmt";
+import { Health } from "./health";
 import { Icon } from "./icons";
 
 interface SettingsResp {
@@ -178,6 +179,8 @@ export function Settings({ onSignedOut }: { onSignedOut: () => void }) {
           </button>
         </div>
       </section>
+
+      <Health />
 
       <Usage />
 

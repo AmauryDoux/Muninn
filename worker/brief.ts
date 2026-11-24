@@ -1,12 +1,17 @@
-// Morning brief wording: one short model call per day, cached (encrypted) for the day.
-import Anthropic from "@anthropic-ai/sdk";
+// Morning brief wording: one short model call, cached (encrypted) per day and per list of items. When the list
+// changes (a new capture, something done), the wording is refreshed, at most MAX_PER_DAY times a day.
+import { client } from "./ai";
 import type { ItemView, Repo } from "./repo";
 import { getSetting, setSetting } from "./lib/settings";
 import { logModelError, logUsage } from "./lib/usage";
+import { sha256b64url } from "./lib/crypto";
+
+const MAX_PER_DAY = 6;
 
 export async function briefText(repo: Repo, date: string, today: ItemView[], overdue: ItemView[]): Promise<string> {
   if (!today.length && !overdue.length) return "Nothing due today.";
-  const key = `brief:${date}`;
+  const ids = [...overdue, ...today].map((i) => `${i.id}:${i.title}`).join("|");
+  const key = `brief:${date}:${(await sha256b64url(ids)).slice(0, 16)}`;
   const cached = await getSetting(repo.db, key);
   if (cached) {
     try {
@@ -16,9 +21,10 @@ export async function briefText(repo: Repo, date: string, today: ItemView[], ove
     }
   }
   const fallback = `${today.length} for today${overdue.length ? `, ${overdue.length} overdue` : ""}.`;
+  const made = await repo.db.prepare("SELECT COUNT(*) AS n FROM settings WHERE key LIKE ?").bind(`brief:${date}:%`).first<{ n: number }>();
+  if ((made?.n ?? 0) >= MAX_PER_DAY) return fallback;
   try {
-    const client = new Anthropic({ apiKey: repo.env.ANTHROPIC_API_KEY, maxRetries: 1, timeout: 15_000 });
-    const res = await client.messages.create({
+    const res = await (await client(repo.env)).messages.create({
       model: repo.env.PARSE_MODEL,
       max_tokens: 600,
       thinking: { type: "disabled" },
