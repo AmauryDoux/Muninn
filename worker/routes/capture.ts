@@ -8,7 +8,8 @@ import { recurrenceToRule } from "../core/rrule";
 import { DISCLAIMERS, PARSER_VERSION, type CaptureOut, type ParseOutput, type RecallOut } from "../core/schema";
 import { matchThing, thingTokens } from "../core/things";
 import { civilOf, civilToIso, resolveTimeRef } from "../core/time";
-import { addFactSmart, applyCategory, resolveThing, things, updateThingAttrs } from "../engine";
+import { logModelError } from "../lib/usage";
+import { addFactSmart, applyCategory, linkThing, resolveThing, things, updateThingAttrs } from "../engine";
 import { getSetting } from "../lib/settings";
 import { HttpError, json, readJson, str } from "../lib/http";
 import { ulid } from "../lib/ulid";
@@ -65,6 +66,7 @@ export async function handleCapture(repo: Repo, req: Request, tz: string): Promi
   const nameOf = (id: string | null) => people.find((p) => p.id === id)?.name ?? "me";
   let out: ParseOutput | null = null;
   let model: string | null = repo.env.PARSE_MODEL;
+  let aiError: string | null = null;
   try {
     ({ out, model } = await parseNote(repo.env, text, {
       now,
@@ -75,8 +77,12 @@ export async function handleCapture(repo: Repo, req: Request, tz: string): Promi
   } catch (e) {
     // Never lose a capture because the model is down: keep the raw note and let the user fix it.
     console.error("parse failed", e instanceof Error ? e.message : e);
+    aiError = await logModelError(repo.db, "parse", e);
     model = null;
   }
+
+  if (!aiError && out && out.intent === "capture" && !out.capture) aiError = "The model returned no capture.";
+  if (!aiError && !out && model) aiError = "The model declined to read this note.";
 
   if (out?.intent === "recall" && out.recall) {
     return json({ type: "answer", ...(await recall(repo, text, out.recall, people, now, tz)) });
@@ -170,6 +176,8 @@ export async function handleCapture(repo: Repo, req: Request, tz: string): Promi
     const currency = (await getSetting(repo.db, "currency")) ?? "USD";
     await applyCategory(repo, itemId, { subtype: cat.subtype, attrs: cap.attrs, thing: thing ? { name: thing.name, kind: thing.kind } : null, recurrence: rrule }, tz, currency);
   }
+  // A plain task or note about an owned object ("change the AC filter") is still linked to it.
+  if (thing && !cat?.thing) await linkThing(repo, itemId, thing.id);
 
   // Told facts: about a person, the user, or the thing ("spare key is in the blue drawer").
   for (const f of cap.facts.slice(0, 6)) {
@@ -205,7 +213,7 @@ export async function handleCapture(repo: Repo, req: Request, tz: string): Promi
   }
 
   const row = (await repo.getItemRow(itemId))!;
-  return json({ type: "capture", item: (await repo.itemViews([row]))[0], question });
+  return json({ type: "capture", item: (await repo.itemViews([row]))[0], question, ai_error: aiError });
 }
 
 function toAnswerItems(views: Awaited<ReturnType<Repo["itemViews"]>>, tz: string): AnswerItem[] {
@@ -288,15 +296,21 @@ async function advise(repo: Repo, question: string, people: Person[], now: Date,
   const focusViews = views.slice(0, focusRows.length);
   const relatedViews = views.slice(focusRows.length);
   const self = people.find((p) => p.relation === "self");
-  const adv = await giveAdvice(repo.env, question, {
+  let adv: Awaited<ReturnType<typeof giveAdvice>> = null;
+  let aiError: string | null = null;
+  try {
+    adv = await giveAdvice(repo.env, question, {
     today: civilToIso(civilOf(now, tz)),
     me: self?.name ?? "me",
     people: people.filter((p) => p.relation !== "self").map((p) => ({ name: p.name, relation: p.relation })),
     facts: facts.map(({ created_at: _c, ...f }) => f),
     related: toAnswerItems(relatedViews, tz),
     focus: toAnswerItems(focusViews, tz),
-  });
-  if (!adv) return { answer: "I couldn't give advice on that one.", items: [], advice: true, because: [], disclaimer: null };
+    });
+  } catch (e) {
+    aiError = await logModelError(repo.db, "advice", e);
+  }
+  if (!adv) return { answer: "I couldn't give advice on that one.", items: [], advice: true, because: [], disclaimer: null, ai_error: aiError };
   const cited = new Set(adv.cited_ids);
   const day = (iso: string) => civilToIso(civilOf(new Date(iso), tz));
   // "Because you told me X": built by code from the cited ids, so the user can spot a wrong memory.
@@ -378,8 +392,14 @@ async function recall(repo: Repo, question: string, r: RecallOut, people: Person
   if (!rows.length && !thingItems.length) return { answer: "I have nothing on that.", items: [] };
   const views = await repo.itemViews(rows);
   const forModel = [...thingItems, ...toAnswerItems(views, tz)];
-  const ans = await answerQuestion(repo.env, question, forModel, today);
-  if (!ans) return { answer: "I couldn't answer that one. Here is what matched.", items: views };
+  let ans: Awaited<ReturnType<typeof answerQuestion>> = null;
+  let aiError: string | null = null;
+  try {
+    ans = await answerQuestion(repo.env, question, forModel, today);
+  } catch (e) {
+    aiError = await logModelError(repo.db, "answer", e);
+  }
+  if (!ans) return { answer: "I couldn't answer that one. Here is what matched.", items: views, ai_error: aiError };
   const cited = new Set(ans.cited_ids);
   return { answer: ans.answer, items: views.filter((v) => cited.has(v.id)) };
 }

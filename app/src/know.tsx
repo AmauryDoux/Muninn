@@ -1,3 +1,4 @@
+import { formatAttr } from "../../worker/core/categories";
 import { useEffect, useState } from "react";
 import { api, type Person } from "./api";
 import { errText } from "./auth";
@@ -85,7 +86,7 @@ function Facts({ facts, onChange }: { facts: Fact[]; onChange: () => void }) {
       {facts.map((f) => (
         <li key={f.id}>
           <span>
-            <strong>{f.key.replace(/_/g, " ")}</strong>: {f.value}
+            <strong>{f.key.replace(/_/g, " ")}</strong>: {/^(\d{4}|-)-\d{2}-\d{2}$/.test(f.value) ? formatAttr({ key: f.key, label: f.key, type: "date" }, f.value) : f.value}
           </span>
           <span className="muted small">
             {f.source}, {ago(f.created_at)}
@@ -124,7 +125,7 @@ function AddFact({ subjectType, subjectId, onAdded }: { subjectType: "me" | "per
         onAdded();
       }}
     >
-      <input placeholder="fact (e.g. shoe size)" value={key} onChange={(e) => setKey(e.target.value)} />
+      <input placeholder="e.g. shoe size" value={key} onChange={(e) => setKey(e.target.value)} />
       <input placeholder="value" value={value} onChange={(e) => setValue(e.target.value)} />
       <button className="btn">Add</button>
     </form>
@@ -175,7 +176,11 @@ function PersonCard({ person, facts, onChange }: { person: Person; facts: Fact[]
         </form>
       ) : (
         <h3 onClick={() => setEditing(true)}>
-          {person.name} <span className="muted small">{person.relation}{person.aliases.length ? ` · ${person.aliases.join(", ")}` : ""}</span>
+          {person.name}
+          <span className="muted small">
+            {" · "}
+            {[person.relation, ...person.aliases.filter((a) => a.toLowerCase() !== person.relation.toLowerCase() && a.toLowerCase() !== person.name.toLowerCase())].join(", ")}
+          </span>
         </h3>
       )}
       <Facts facts={facts} onChange={onChange} />

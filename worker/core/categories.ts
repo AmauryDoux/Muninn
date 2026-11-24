@@ -1,6 +1,6 @@
 // The category registry: every roadmap feature is a subtype with typed attributes, a group for the
 // Life screen, and the triggers it schedules. Pure: no I/O. Shared by the Worker and the app.
-import { addMonths, cmp, parseCivil, civilToIso, type CivilDate } from "./civil";
+import { addMonths, cmp, parseCivil, parseDateFact, civilToIso, type CivilDate } from "./civil";
 import { formatMoney, isCurrency, parseMoney, type Money } from "./money";
 
 export type GroupId = "family" | "home" | "money" | "work" | "learning" | "health";
@@ -267,6 +267,10 @@ export function attrText(a: Attrs | null | undefined, key: string): string | nul
 export function formatAttr(fd: FieldDef, v: AttrValue): string {
   if (fd.type === "money" && typeof v === "object") return formatMoney(v);
   if (fd.type === "enum" && typeof v === "string") return fd.optionLabels?.[v] ?? v;
+  if (fd.type === "date" && typeof v === "string") {
+    const d = parseDateFact(v);
+    if (d) return d.year ? fmtDay(d as CivilDate) : fmtDay({ year: 2000, month: d.month, day: d.day }).replace(/ 2000$/, "");
+  }
   return String(v);
 }
 

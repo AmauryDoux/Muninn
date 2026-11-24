@@ -107,7 +107,7 @@ export async function refreshTips(repo: Repo, now: Date, tz: string, reword: boo
   for (const e of existing) if (e.status === "active" && !seen.has(e.key)) stmts.push(db.prepare("UPDATE tips SET status = 'expired', updated_at = ? WHERE id = ?").bind(iso, e.id));
   for (let i = 0; i < stmts.length; i += 50) await db.batch(stmts.slice(i, i + 50));
 
-  if (reword && fresh.length && (await getSetting(db, "tips_ai")) !== "0") {
+  if (reword && fresh.length && (await getSetting(db, "tips_ai")) === "1") {
     try {
       const words = await wordTips(repo.env, fresh.slice(0, 8).map(({ id, draft }) => ({ id, draft })));
       for (const f of fresh) {

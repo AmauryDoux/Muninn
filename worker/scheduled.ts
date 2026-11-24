@@ -29,7 +29,7 @@ export async function runScheduled(env: Env, now = new Date()): Promise<void> {
 
   // Triggers first, so a task they create is reminded in this same run.
   await job("triggers", () => fireTriggers(repo, now, rs.tz));
-  await reminders(repo, rs, now);
+  await job("reminders", () => reminders(repo, rs, now));
 
   const at = (h: number) => p.hour === h && p.minute < 5;
   if (at(3)) await job("patterns", () => refreshPatterns(repo, now, rs.tz));
@@ -42,6 +42,10 @@ export async function runScheduled(env: Env, now = new Date()): Promise<void> {
 
 async function reminders(repo: Repo, rs: ReturnType<typeof reminderSettings>, now: Date) {
   const db = repo.db;
+  // No push set up yet (no VAPID keys or no device): nothing can be delivered, so mark nothing as reminded.
+  // Otherwise every reminder would count as sent and be lost once push is turned on.
+  if (!repo.env.VAPID_PUBLIC_KEY || !repo.env.VAPID_PRIVATE_KEY) return;
+  if (!(await db.prepare("SELECT 1 FROM push_subscriptions LIMIT 1").first())) return;
   // No decryption needed: the cron only looks at times and ids.
   const { results } = await db
     .prepare(

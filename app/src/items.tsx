@@ -50,6 +50,8 @@ export function ItemRow({ item, onChange }: { item: Item; onChange: () => void }
           {c && (
             <span className={`tint g-${c.group}`}>
               <Icon name={c.icon} size={14} />
+              {/* Alone, an icon reads as a glitch: name the category when nothing else is shown. */}
+              {!w && !item.recurrence_text && !item.for_person && !item.requested_by && !item.place_hint && !item.status_line && <> {c.label}</>}
             </span>
           )}
           {w && <span>{w}</span>}

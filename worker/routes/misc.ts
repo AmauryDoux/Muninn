@@ -1,3 +1,4 @@
+import { DEFAULT_REMINDER_SETTINGS } from "../core/reminders";
 import { transcribe } from "../ai";
 import { summarize, type UsageRow } from "../core/costs";
 import { groupItems } from "../core/group";
@@ -83,7 +84,20 @@ export async function testPush(repo: Repo): Promise<Response> {
 export async function getSettings(repo: Repo): Promise<Response> {
   const m = await getSettingsMap(repo.db);
   const out: Record<string, string | null> = {};
-  for (const k of USER_SETTING_KEYS) out[k] = m.get(k) ?? null;
+  // Show the values in effect, defaults included, so the form never looks empty.
+  const d = DEFAULT_REMINDER_SETTINGS;
+  const defaults: Record<string, string> = {
+    quiet_start: d.quietStart,
+    quiet_end: d.quietEnd,
+    daily_cap: String(d.dailyCap),
+    brief_time: d.briefTime,
+    start_hour: d.startHour,
+    evening_hour: d.eveningHour,
+    currency: "USD",
+    tips_enabled: "1",
+    tips_ai: "0",
+  };
+  for (const k of USER_SETTING_KEYS) out[k] = m.get(k) ?? defaults[k] ?? null;
   return json({ settings: out, vapid_public_key: repo.env.VAPID_PUBLIC_KEY || null, vectorize: !!repo.env.VECTORIZE });
 }
 
@@ -179,7 +193,18 @@ export async function getUsage(repo: Repo, url: URL): Promise<Response> {
     .bind(start, end)
     .all<{ payload_json: string }>();
   const rows = results.map((r) => JSON.parse(r.payload_json) as UsageRow);
-  return json({ month, ...summarize(rows) });
+  // Latest AI failure and the latest success, so the phone can show whether the AI works right now.
+  const lastErr = await repo.db
+    .prepare("SELECT at, payload_json FROM events WHERE type = 'model_error' ORDER BY at DESC LIMIT 1")
+    .first<{ at: string; payload_json: string }>();
+  const lastOk = await repo.db.prepare("SELECT at FROM events WHERE type = 'model_usage' ORDER BY at DESC LIMIT 1").first<{ at: string }>();
+  const err = lastErr ? (JSON.parse(lastErr.payload_json) as { job: string; status: number | null; message: string }) : null;
+  return json({
+    month,
+    ...summarize(rows),
+    last_error: err ? { at: lastErr!.at, job: err.job, status: err.status, message: err.message } : null,
+    last_success_at: lastOk?.at ?? null,
+  });
 }
 
 // ---- export ----

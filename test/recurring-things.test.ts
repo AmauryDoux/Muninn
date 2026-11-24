@@ -82,3 +82,15 @@ describe("statusLine", () => {
     expect(statusLine("idea", null, "open", today)).toBeNull();
   });
 });
+
+describe("firstWindow for a seasonal chore", () => {
+  it("is due now when added during its month, through the end of the month", () => {
+    const w = firstWindow("FREQ=YEARLY;BYMONTH=11", new Date("2026-11-24T18:00:00Z"), "America/Chicago")!;
+    expect(w.window_start).toBe("2026-11-24T06:00:00.000Z");
+    expect(w.window_end).toBe("2026-12-01T06:00:00.000Z");
+  });
+  it("waits for the month otherwise", () => {
+    const w = firstWindow("FREQ=YEARLY;BYMONTH=4", new Date("2026-11-24T18:00:00Z"), "America/Chicago")!;
+    expect(w.window_start).toBe("2027-04-01T05:00:00.000Z");
+  });
+});

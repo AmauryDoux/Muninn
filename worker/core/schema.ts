@@ -116,7 +116,7 @@ export const AnswerSchema = z.object({
 });
 export type AnswerOut = z.infer<typeof AnswerSchema>;
 
-export const PARSER_VERSION = "parse-v2";
+export const PARSER_VERSION = "parse-v3";
 
 /** Model rewording of code-written tips. Each text is checked by rewordIsFaithful before use. */
 export const TipWordingSchema = z.object({

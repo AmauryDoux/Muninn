@@ -106,7 +106,6 @@ export function Settings({ onSignedOut }: { onSignedOut: () => void }) {
 
   return (
     <div>
-      <h2>Settings</h2>
       {msg && <p className="notice">{msg}</p>}
 
       <section className="card">
@@ -197,7 +196,7 @@ function LifeSettings({ settings, onMsg }: { settings: Record<string, string | n
     home_lat: settings.home_lat ?? "",
     home_lon: settings.home_lon ?? "",
     tips_enabled: settings.tips_enabled ?? "1",
-    tips_ai: settings.tips_ai ?? "1",
+    tips_ai: settings.tips_ai ?? "0",
   });
   async function save(patch: Partial<typeof v>) {
     const next = { ...v, ...patch };
@@ -302,6 +301,30 @@ interface UsageResp {
   input_tokens: number;
   output_tokens: number;
   by_job: Record<string, { calls: number; usd: number; model: string; input_tokens: number; output_tokens: number }>;
+  last_error?: { at: string; job: string; status: number | null; message: string } | null;
+  last_success_at?: string | null;
+}
+
+function AiStatus({ u }: { u: UsageResp }) {
+  const err = u.last_error;
+  const failing = err && (!u.last_success_at || err.at > u.last_success_at);
+  const when = (iso: string) => new Date(iso).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
+  if (failing)
+    return (
+      <p className="ai-error small" role="status">
+        <strong>AI is failing.</strong> Last error {when(err.at)} ({JOB_LABELS[err.job] ?? err.job}): {err.status ? `${err.status} ` : ""}
+        {err.message.replace(/\.?$/, ".")}
+        {err.status === 401 && <> The Anthropic API key is missing or wrong: set it again with wrangler secret put ANTHROPIC_API_KEY.</>}
+        {err.status === 429 && <> Rate limit or spend limit reached in the Anthropic Console.</>}
+      </p>
+    );
+  if (u.last_success_at)
+    return (
+      <p className="ai-ok small" role="status">
+        <strong>AI is working.</strong> Last successful call {when(u.last_success_at)}.
+      </p>
+    );
+  return <p className="muted small">No AI calls yet.</p>;
 }
 
 const JOB_LABELS: Record<string, string> = {
@@ -330,6 +353,7 @@ function Usage() {
       </label>
       {u && (
         <>
+          <AiStatus u={u} />
           <p>
             <strong>${u.usd.toFixed(2)}</strong> <span className="muted small">estimated, {u.calls} calls</span>
           </p>
