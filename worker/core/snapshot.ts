@@ -3,7 +3,7 @@
 // `wrangler d1 execute`. Unlike the JSON export (decrypted, for you to read), this brings back sign-in too.
 
 /** In foreign-key order. Left out: sessions and login attempts (short-lived), push devices (re-subscribe after a
- * restore) and search vectors (rebuilt by the cron from the notes). */
+ * restore) and search vectors (rebuilt by the cron from the notes). File bytes stay in R2 under files/. */
 export const SNAPSHOT_TABLES = [
   "settings",
   "people",
@@ -19,6 +19,7 @@ export const SNAPSHOT_TABLES = [
   "events",
   "passkeys",
   "api_tokens",
+  "files",
 ] as const;
 
 /** Settings that are only transient state. */

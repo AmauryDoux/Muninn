@@ -73,6 +73,17 @@ export class Cipher {
     );
     return concat(iv, ct);
   }
+
+  /** Decrypt a blob sealed with sealBytes. */
+  async openBytes(sealed: Uint8Array, aad: string): Promise<Uint8Array> {
+    if (sealed.length < 12 + 16) throw new Error("bad sealed blob");
+    const pt = await crypto.subtle.decrypt(
+      { name: "AES-GCM", iv: sealed.slice(0, 12), additionalData: utf8(aad) },
+      this.aes,
+      sealed.slice(12) as Uint8Array<ArrayBuffer>,
+    );
+    return new Uint8Array(pt);
+  }
 }
 
 export async function sha256b64url(s: string): Promise<string> {

@@ -39,6 +39,7 @@ import {
 } from "./routes/life";
 import { runScheduled } from "./scheduled";
 import { getReview } from "./routes/review";
+import { deleteFile, getFile, listFiles, uploadFile } from "./routes/files";
 import { calendarFeed, createToken, deleteToken, listTokens, shortcutCapture } from "./routes/tokens";
 
 let cipherCache: { key: string; cipher: Promise<Cipher> } | null = null;
@@ -95,6 +96,17 @@ async function api(req: Request, env: Env): Promise<Response> {
     }
   }
   if ((mm = path.match(new RegExp(`^/api/items/${ID}/act$`))) && m === "POST") return actOnItem(repo, req, mm[1], rs);
+  if ((mm = path.match(new RegExp(`^/api/items/${ID}/files$`)))) {
+    if (m === "GET") return listFiles(repo, mm[1]);
+    if (m === "POST") return uploadFile(repo, req, mm[1]);
+  }
+  if ((mm = path.match(new RegExp(`^/api/files/${ID}$`)))) {
+    if (m === "GET") return getFile(repo, mm[1]);
+    if (m === "DELETE") {
+      requireFresh(session);
+      return deleteFile(repo, mm[1]);
+    }
+  }
   if (path === "/api/brief" && m === "GET") return getBrief(repo, rs);
 
   if (path === "/api/people" && m === "GET") return listPeople(repo);

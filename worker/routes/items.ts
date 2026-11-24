@@ -3,6 +3,7 @@ import { rollRecurring } from "../core/recurring";
 import { snoozeUntil, type ReminderSettings } from "../core/reminders";
 import { syncItemTriggers } from "../engine";
 import { addDays, civilOf, parseCivil, resolveTimeRef, startOfLocalDay } from "../core/time";
+import { deleteItemFiles } from "./files";
 import { HttpError, json, readJson, str } from "../lib/http";
 import type { ItemRow, Repo } from "../repo";
 
@@ -212,6 +213,7 @@ const UNDO_COLUMNS = ["status", "window_start", "window_end", "due_at", "snoozed
 export async function deleteItem(repo: Repo, id: string): Promise<Response> {
   const row = await repo.getItemRow(id);
   if (!row) throw new HttpError(404, "not_found");
+  await deleteItemFiles(repo, id);
   const stmts = [repo.db.prepare("DELETE FROM items WHERE id = ?").bind(id), repo.db.prepare("DELETE FROM events WHERE item_id = ?").bind(id)];
   if (row.capture_id) {
     stmts.push(repo.db.prepare("DELETE FROM capture_vectors WHERE capture_id = ?").bind(row.capture_id));

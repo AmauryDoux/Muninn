@@ -8,6 +8,7 @@ import { ago, todayBounds, when } from "./fmt";
 import { Icon } from "./icons";
 import { Back, Empty, SectionH, Sheet, haptic, peopleChanged } from "./ui";
 import { offerUndo } from "./undo";
+import { Attachments } from "./files";
 
 const LABELS: Record<Bucket, string> = { overdue: "Overdue", today: "Today", upcoming: "Coming up", anytime: "Anytime", snoozed: "Snoozed" };
 
@@ -318,6 +319,7 @@ export function ItemDetail({ id, people, onBack }: { id: string; people: Person[
           />
         </Sheet>
       )}
+      <Attachments itemId={id} />
       {err && <p className="error">{err}</p>}
       <div className="stack">
         {item.status === "open" ? (
