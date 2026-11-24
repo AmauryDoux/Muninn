@@ -9,6 +9,7 @@ import { ulid } from "../lib/ulid";
 import { isAllowedPushEndpoint, sendPush } from "../lib/webpush";
 import type { ItemRow, Repo } from "../repo";
 import { briefText } from "../brief";
+import { currentTips } from "../advice";
 
 // ---- push ----
 
@@ -94,10 +95,24 @@ export async function putSettings(repo: Repo, req: Request): Promise<Response> {
     const v = b[k];
     if (v === undefined) continue;
     const s = str(v, k, 64);
-    if (k === "tz" && !isValidTimeZone(s)) throw new HttpError(400, "bad_tz");
-    if (k === "daily_cap" && !/^(?:[0-9]|10)$/.test(s)) throw new HttpError(400, "bad_daily_cap");
-    if (k !== "tz" && k !== "daily_cap" && !HHMM.test(s)) throw new HttpError(400, `bad_${k}`);
-    await setSetting(repo.db, k, s);
+    let val = s;
+    if (k === "tz") {
+      if (!isValidTimeZone(s)) throw new HttpError(400, "bad_tz");
+    } else if (k === "daily_cap") {
+      if (!/^(?:[0-9]|10)$/.test(s)) throw new HttpError(400, "bad_daily_cap");
+    } else if (k === "currency") {
+      val = s.toUpperCase();
+      if (!/^[A-Z]{3}$/.test(val)) throw new HttpError(400, "bad_currency");
+    } else if (k === "home_lat" || k === "home_lon") {
+      // Rounded to 2 decimals (about 1 km): enough for a forecast, less precise than a home address.
+      const n = Number(s);
+      const lim = k === "home_lat" ? 90 : 180;
+      if (s === "" || !Number.isFinite(n) || Math.abs(n) > lim) throw new HttpError(400, `bad_${k}`);
+      val = n.toFixed(2);
+    } else if (k === "tips_enabled" || k === "tips_ai") {
+      if (s !== "0" && s !== "1") throw new HttpError(400, `bad_${k}`);
+    } else if (!HHMM.test(s)) throw new HttpError(400, `bad_${k}`);
+    await setSetting(repo.db, k, val);
   }
   return getSettings(repo);
 }
@@ -133,9 +148,16 @@ export async function getBrief(repo: Repo, rs: ReminderSettings): Promise<Respon
     .bind(now.toISOString())
     .first<{ id: string; subject_type: string; subject_id: string | null; key: string }>();
   const text = await briefText(repo, civilToIso(today), g.today, g.overdue);
+  let tips: Awaited<ReturnType<typeof currentTips>> = [];
+  try {
+    tips = await currentTips(repo, now, rs.tz);
+  } catch (e) {
+    console.warn("tips failed", e instanceof Error ? e.message : e);
+  }
   return json({
     date: civilToIso(today),
     summary: text,
+    tips,
     today: g.today,
     overdue: g.overdue,
     stale_fact: stale,
@@ -182,7 +204,18 @@ export async function buildExport(repo: Repo) {
   const { results: facts } = await db.prepare("SELECT * FROM facts ORDER BY created_at").all<Record<string, string | number | null>>();
   const { results: patterns } = await db.prepare("SELECT * FROM patterns").all();
   const { results: links } = await db.prepare("SELECT * FROM links").all();
-  const { results: triggers } = await db.prepare("SELECT * FROM triggers").all();
+  const { results: triggerRows } = await db.prepare("SELECT * FROM triggers").all<Record<string, string | number | null>>();
+  const triggers = await Promise.all(
+    triggerRows.map(async ({ payload_enc, ...t }) => ({ ...t, payload: payload_enc ? JSON.parse(await c.decrypt(String(payload_enc), `triggers:${t.id}:payload`)) : null })),
+  );
+  const { results: tipRows } = await db.prepare("SELECT * FROM tips").all<Record<string, string | number | null>>();
+  const tips = await Promise.all(
+    tipRows.map(async ({ content_enc, wording_enc, ...t }) => ({
+      ...t,
+      content: JSON.parse(await c.decrypt(String(content_enc), `tips:${t.id}:content`)),
+      wording: wording_enc ? await c.decrypt(String(wording_enc), `tips:${t.id}:wording`) : null,
+    })),
+  );
   const decNamed = async (table: string, rows: Record<string, string | null>[]) =>
     Promise.all(
       rows.map(async ({ name_enc, attrs_enc, ...rest }) => ({
@@ -197,7 +230,7 @@ export async function buildExport(repo: Repo) {
   const settings = await getSettingsMap(db);
   return {
     format: "muninn-export",
-    version: 1,
+    version: 2,
     exported_at: new Date().toISOString(),
     settings: Object.fromEntries(USER_SETTING_KEYS.map((k) => [k, settings.get(k) ?? null])),
     people: await repo.people(),
@@ -233,6 +266,7 @@ export async function buildExport(repo: Repo) {
     places,
     links,
     triggers,
+    tips,
     patterns,
     events,
   };

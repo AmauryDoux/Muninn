@@ -20,6 +20,22 @@ import {
   unsubscribePush,
 } from "./routes/misc";
 import { addFact, createPerson, deleteFact, deletePerson, knowledge, listPeople, patchFact, patchPattern, patchPerson } from "./routes/profile";
+import {
+  addSeasonalStarter,
+  createLifeItem,
+  createThingRoute,
+  deleteThing,
+  getThing,
+  getTips,
+  ideasDigest,
+  lifeSummary,
+  listLifeItems,
+  listThings,
+  patchLifeItem,
+  patchThing,
+  postTip,
+  upcoming,
+} from "./routes/life";
 import { runScheduled } from "./scheduled";
 
 let cipherCache: { key: string; cipher: Promise<Cipher> } | null = null;
@@ -49,8 +65,8 @@ async function api(req: Request, env: Env): Promise<Response> {
   }
 
   const session = await requireSession(env, req);
-  const repo = new Repo(env, cipher);
   const rs = reminderSettings(await getSettingsMap(env.DB));
+  const repo = new Repo(env, cipher, rs.tz);
   let mm: RegExpMatchArray | null;
 
   if (path === "/api/capture" && m === "POST") return handleCapture(repo, req, rs.tz);
@@ -76,7 +92,28 @@ async function api(req: Request, env: Env): Promise<Response> {
       return deletePerson(repo, mm[1]);
     }
   }
-  if (path === "/api/facts" && m === "POST") return addFact(repo, req);
+  if (path === "/api/facts" && m === "POST") return addFact(repo, req, rs.tz);
+
+  // Life: categories, dates, things, tips, digest.
+  if (path === "/api/life" && m === "GET") return lifeSummary(repo, rs.tz);
+  if (path === "/api/life/items" && m === "GET") return listLifeItems(repo, url);
+  if (path === "/api/life/items" && m === "POST") return createLifeItem(repo, req, rs.tz);
+  if ((mm = path.match(new RegExp(`^/api/life/items/${ID}$`))) && m === "PATCH") return patchLifeItem(repo, req, mm[1], rs.tz);
+  if (path === "/api/life/seasonal-starter" && m === "POST") return addSeasonalStarter(repo, rs.tz);
+  if (path === "/api/dates" && m === "GET") return upcoming(repo, url, rs.tz);
+  if (path === "/api/things" && m === "GET") return listThings(repo);
+  if (path === "/api/things" && m === "POST") return createThingRoute(repo, req);
+  if ((mm = path.match(new RegExp(`^/api/things/${ID}$`)))) {
+    if (m === "GET") return getThing(repo, mm[1]);
+    if (m === "PATCH") return patchThing(repo, req, mm[1]);
+    if (m === "DELETE") {
+      requireFresh(session);
+      return deleteThing(repo, mm[1]);
+    }
+  }
+  if (path === "/api/tips" && m === "GET") return getTips(repo, rs.tz);
+  if ((mm = path.match(new RegExp(`^/api/tips/${ID}$`))) && m === "POST") return postTip(repo, req, mm[1]);
+  if (path === "/api/digest" && m === "GET") return ideasDigest(repo, url, rs.tz);
 
   // "What I know about you" and everything that edits it need a fresh passkey/password check.
   if (path === "/api/know" && m === "GET") {
@@ -85,7 +122,7 @@ async function api(req: Request, env: Env): Promise<Response> {
   }
   if ((mm = path.match(new RegExp(`^/api/facts/${ID}$`)))) {
     requireFresh(session);
-    if (m === "PATCH") return patchFact(repo, req, mm[1]);
+    if (m === "PATCH") return patchFact(repo, req, mm[1], rs.tz);
     if (m === "DELETE") return deleteFact(repo, mm[1]);
   }
   if ((mm = path.match(new RegExp(`^/api/patterns/${ID}$`))) && m === "PATCH") {

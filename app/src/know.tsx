@@ -64,7 +64,7 @@ export function Know({ onPeopleChanged }: { onPeopleChanged: () => void }) {
             {data.patterns.map((p) => (
               <li key={p.id}>
                 <strong>{p.key}</strong> {p.value_json} <span className="muted small">from {p.sample_size} data points, {ago(p.computed_at)}</span>{" "}
-                <button className="link" onClick={() => api(`/api/patterns/${p.id}`, { method: "PATCH", body: { active: !p.active } }).then(load)}>
+                <button className="btn ghost small" onClick={() => api(`/api/patterns/${p.id}`, { method: "PATCH", body: { active: !p.active } }).then(load)}>
                   {p.active ? "Switch off" : "Switch on"}
                 </button>
               </li>
@@ -91,7 +91,7 @@ function Facts({ facts, onChange }: { facts: Fact[]; onChange: () => void }) {
             {f.source}, {ago(f.created_at)}
           </span>
           <button
-            className="link"
+            className="btn ghost small"
             onClick={async () => {
               const v = prompt(`New value for ${f.key}`, f.value);
               if (v != null && v.trim()) await api(`/api/facts/${f.id}`, { method: "PATCH", body: { value: v.trim() } });
@@ -100,7 +100,7 @@ function Facts({ facts, onChange }: { facts: Fact[]; onChange: () => void }) {
           >
             Edit
           </button>
-          <button className="link danger" onClick={() => api(`/api/facts/${f.id}`, { method: "DELETE" }).then(onChange)}>
+          <button className="btn ghost small danger" onClick={() => api(`/api/facts/${f.id}`, { method: "DELETE" }).then(onChange)}>
             Delete
           </button>
         </li>
@@ -126,7 +126,7 @@ function AddFact({ subjectType, subjectId, onAdded }: { subjectType: "me" | "per
     >
       <input placeholder="fact (e.g. shoe size)" value={key} onChange={(e) => setKey(e.target.value)} />
       <input placeholder="value" value={value} onChange={(e) => setValue(e.target.value)} />
-      <button>Add</button>
+      <button className="btn">Add</button>
     </form>
   );
 }
@@ -158,10 +158,10 @@ function PersonCard({ person, facts, onChange }: { person: Person; facts: Fact[]
           </select>
           <input value={aliases} onChange={(e) => setAliases(e.target.value)} placeholder="aliases, comma separated" />
           <div className="row">
-            <button className="primary">Save</button>
+            <button className="btn primary">Save</button>
             <button
               type="button"
-              className="link danger"
+              className="btn ghost small danger"
               onClick={async () => {
                 if (confirm(`Forget ${person.name} and their facts?`)) {
                   await api(`/api/people/${person.id}`, { method: "DELETE" });
@@ -204,7 +204,7 @@ function AddPerson({ onAdded }: { onAdded: () => void }) {
           <option key={r}>{r}</option>
         ))}
       </select>
-      <button>Add</button>
+      <button className="btn">Add</button>
     </form>
   );
 }

@@ -1,4 +1,5 @@
 // Pure: turn a validated recall object into a parameterised SQL query. The model never writes SQL.
+import { category } from "./categories";
 import { resolveTimeRef, type TimeRef } from "./time";
 
 export interface RecallFilter {
@@ -8,6 +9,8 @@ export interface RecallFilter {
   scheduled: TimeRef | null;
   status: "open" | "done" | "dropped" | "any";
   kind: "task" | "note" | "fact" | "event" | "any";
+  /** A category subtype, or "any"/undefined. Validated against the registry. */
+  subtype?: string | null;
 }
 
 export interface SqlQuery {
@@ -44,9 +47,13 @@ export function buildRecallQuery(f: RecallFilter, now: Date, tz: string, limit =
     where.push("status = ?");
     params.push(f.status);
   }
-  if (KINDS.has(f.kind)) {
+  if (KINDS.has(f.kind) && !f.subtype) {
     where.push("kind = ?");
     params.push(f.kind);
+  }
+  if (f.subtype && category(f.subtype)) {
+    where.push("subtype = ?");
+    params.push(f.subtype);
   }
   const n = Math.max(1, Math.min(200, Math.trunc(limit)));
   const sql =

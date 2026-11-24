@@ -63,3 +63,15 @@ describe("cosine", () => {
     expect(cosine(Float32Array.from([1, 0]), Float32Array.from([0, 1]))).toBeCloseTo(0);
   });
 });
+
+describe("recall by category", () => {
+  const none = { type: "none" as const };
+  it("filters on a known subtype only", () => {
+    const q = buildRecallQuery({ requestedById: null, forPersonId: "P", created: none, scheduled: none, status: "open", kind: "note", subtype: "debt" }, new Date(), "UTC");
+    expect(q.sql).toContain("subtype = ?");
+    expect(q.sql).not.toContain("kind = ?");
+    expect(q.params).toEqual(["P", "open", "debt"]);
+    const bad = buildRecallQuery({ requestedById: null, forPersonId: null, created: none, scheduled: none, status: "any", kind: "any", subtype: "x' OR 1=1 --" }, new Date(), "UTC");
+    expect(bad.sql).not.toContain("subtype");
+  });
+});

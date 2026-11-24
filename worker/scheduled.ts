@@ -8,16 +8,34 @@ import { getSettingsMap, reminderSettings } from "./lib/settings";
 import { utf8 } from "./lib/b64";
 import { Repo } from "./repo";
 import { buildExport, pushAll } from "./routes/misc";
+import { refreshPatterns, refreshTips, refreshWeather } from "./advice";
+import { fireTriggers } from "./engine";
+import { inQuietHours } from "./core/time";
 
 export async function runScheduled(env: Env, now = new Date()): Promise<void> {
   const settings = await getSettingsMap(env.DB);
   if (settings.get("setup_done") !== "1") return;
   const rs = reminderSettings(settings);
-  const repo = new Repo(env, await Cipher.fromSecret(env.DATA_KEY));
+  const repo = new Repo(env, await Cipher.fromSecret(env.DATA_KEY), rs.tz);
+  const p = localParts(now, rs.tz);
+  // Each job is isolated: one failing must not stop reminders.
+  const job = async (name: string, fn: () => Promise<unknown>) => {
+    try {
+      await fn();
+    } catch (e) {
+      console.error(`${name} failed`, e instanceof Error ? e.stack : e);
+    }
+  };
 
+  // Triggers first, so a task they create is reminded in this same run.
+  await job("triggers", () => fireTriggers(repo, now, rs.tz));
   await reminders(repo, rs, now);
 
-  const p = localParts(now, rs.tz);
+  const at = (h: number) => p.hour === h && p.minute < 5;
+  if (at(3)) await job("patterns", () => refreshPatterns(repo, now, rs.tz));
+  if (at(5)) await job("weather", () => refreshWeather(repo));
+  if (at(6)) await job("tips", () => refreshTips(repo, now, rs.tz, true));
+  if (p.weekday === 0 && at(18)) await job("digest", () => ideasDigestPush(repo, rs, now));
   if (p.minute < 5) await housekeeping(env, now);
   if (env.BACKUPS && p.weekday === 0 && p.hour === 3 && p.minute < 5) await backup(repo, now);
 }
@@ -110,4 +128,22 @@ async function backup(repo: Repo, now: Date) {
   const list = await bucket.list({ prefix: "backup-" });
   const old = list.objects.map((o) => o.key).sort().slice(0, -8);
   if (old.length) await bucket.delete(old);
+}
+
+/** Sunday evening: one push if ideas were captured this week. Counts toward the daily cap like any push. */
+async function ideasDigestPush(repo: Repo, rs: ReturnType<typeof reminderSettings>, now: Date) {
+  const db = repo.db;
+  const week = await db
+    .prepare("SELECT COUNT(*) AS n FROM items WHERE subtype = 'idea' AND created_at >= ?")
+    .bind(new Date(now.getTime() - 7 * 86400_000).toISOString())
+    .first<{ n: number }>();
+  if (!week?.n || inQuietHours(now, rs.tz, rs.quietStart, rs.quietEnd)) return;
+  const dayStart = startOfLocalDay(civilOf(now, rs.tz), rs.tz).toISOString();
+  const sent = await db.prepare("SELECT nudge_type FROM events WHERE type = 'push_sent' AND at >= ?").bind(dayStart).all<{ nudge_type: string }>();
+  if (sent.results.some((r) => r.nudge_type === "digest") || sent.results.length >= rs.dailyCap) return;
+  const delivered = await pushAll(repo, { title: "Your week", body: `${week.n} new idea${week.n > 1 ? "s" : ""} to look over`, url: "/?view=digest", tag: "digest" });
+  await db
+    .prepare("INSERT INTO events (id, at, type, nudge_type, payload_json) VALUES (?, ?, 'push_sent', 'digest', ?)")
+    .bind(crypto.randomUUID(), now.toISOString(), JSON.stringify({ items: week.n, devices: delivered }))
+    .run();
 }

@@ -1,69 +1,123 @@
 import { useEffect, useState } from "react";
 import { groupItems, type Bucket } from "../../worker/core/group";
+import { category, formatAttr, type Attrs } from "../../worker/core/categories";
 import { api, type Item, type Person } from "./api";
 import { errText } from "./auth";
 import { PersonPick, WhenEdit } from "./capture";
 import { ago, todayBounds, when } from "./fmt";
+import { Icon } from "./icons";
+import { Back, Empty, SectionH, Sheet, haptic } from "./ui";
 
-const LABELS: Record<Bucket, string> = { overdue: "Overdue", today: "Today", upcoming: "Upcoming", anytime: "Anytime", snoozed: "Snoozed" };
+const LABELS: Record<Bucket, string> = { overdue: "Overdue", today: "Today", upcoming: "Coming up", anytime: "Anytime", snoozed: "Snoozed" };
+
+export function iconFor(item: Pick<Item, "subtype" | "from_reminder" | "kind">): string {
+  const c = category(item.subtype);
+  if (c) return c.icon;
+  if (item.from_reminder) return "bell";
+  return item.kind === "event" ? "calendar" : item.kind === "note" ? "known" : "check";
+}
 
 export function ItemRow({ item, onChange }: { item: Item; onChange: () => void }) {
   const [menu, setMenu] = useState(false);
+  const [done, setDone] = useState(item.status !== "open");
   async function act(action: string, preset?: string) {
-    await api(`/api/items/${item.id}/act`, { body: { action, preset } });
+    haptic();
+    if (action === "done") setDone(true);
+    if (action === "reopen") setDone(false);
     setMenu(false);
-    onChange();
+    try {
+      await api(`/api/items/${item.id}/act`, { body: { action, preset } });
+    } finally {
+      onChange();
+    }
   }
-  const meta = [when(item), item.for_person && `for ${item.for_person.name}`, item.requested_by && `from ${item.requested_by.name}`, item.place_hint]
-    .filter(Boolean)
-    .join(" · ");
+  const c = category(item.subtype);
+  const w = when(item);
   return (
-    <li className={`item ${item.status}`}>
+    <li className={`irow ${done ? "done" : item.status}`}>
       {item.status === "open" ? (
-        <button className="check" aria-label="Done" onClick={() => act("done")} />
+        <button className={done ? "check done" : "check"} aria-label={item.recurrence ? "Done for now" : "Done"} onClick={() => act("done")}>
+          <Icon name="check" size={16} />
+        </button>
       ) : (
-        <button className="check done" aria-label="Reopen" onClick={() => act("reopen")} />
+        <button className="check done" aria-label="Reopen" onClick={() => act("reopen")}>
+          <Icon name="check" size={16} />
+        </button>
       )}
       <a className="body" href={`#/item/${item.id}`}>
         <span className="title">{item.title}</span>
-        {meta && <span className="meta">{meta}</span>}
+        <span className="meta">
+          {c && (
+            <span className={`tint g-${c.group}`}>
+              <Icon name={c.icon} size={14} />
+            </span>
+          )}
+          {w && <span>{w}</span>}
+          {item.recurrence_text && (
+            <span>
+              <Icon name="repeat" size={13} /> {item.recurrence_text}
+            </span>
+          )}
+          {item.for_person && <span>for {item.for_person.name}</span>}
+          {item.requested_by && <span>from {item.requested_by.name}</span>}
+          {item.place_hint && <span>{item.place_hint}</span>}
+          {item.status_line && <span className={`tone-${item.status_line.tone}`}>{item.status_line.text}</span>}
+        </span>
       </a>
       {item.status === "open" && (
-        <button className="more" aria-label="More" onClick={() => setMenu(!menu)}>
-          ⋯
+        <button className="iconbtn" aria-label="More" onClick={() => setMenu(true)}>
+          <Icon name="more" />
         </button>
       )}
       {menu && (
-        <div className="menu">
-          <button onClick={() => act("snooze", "1h")}>1 hour</button>
-          <button onClick={() => act("snooze", "evening")}>This evening</button>
-          <button onClick={() => act("snooze", "tomorrow")}>Tomorrow</button>
-          <button onClick={() => act("snooze", "next_week")}>Next week</button>
-          <button className="danger" onClick={() => act("dismiss")}>
-            Drop
-          </button>
-        </div>
+        <Sheet title={item.title} onClose={() => setMenu(false)}>
+          <div className="actions">
+            <button className="action" onClick={() => act("snooze", "1h")}>
+              <Icon name="clock" /> In 1 hour
+            </button>
+            <button className="action" onClick={() => act("snooze", "evening")}>
+              <Icon name="snooze" /> This evening
+            </button>
+            <button className="action" onClick={() => act("snooze", "tomorrow")}>
+              <Icon name="today" /> Tomorrow morning
+            </button>
+            <button className="action" onClick={() => act("snooze", "next_week")}>
+              <Icon name="calendar" /> Next week
+            </button>
+            <button className="action danger" onClick={() => act("dismiss")}>
+              <Icon name="x" /> Drop it
+            </button>
+          </div>
+        </Sheet>
       )}
     </li>
   );
 }
 
-export function OpenList({ items, onChange, only }: { items: Item[]; onChange: () => void; only?: Bucket[] }) {
+export function ItemList({ items, onChange }: { items: Item[]; onChange: () => void }) {
+  return (
+    <ul className="list list-card">
+      {items.map((i) => (
+        <ItemRow key={i.id} item={i} onChange={onChange} />
+      ))}
+    </ul>
+  );
+}
+
+export function OpenList({ items, onChange, only, emptyText }: { items: Item[]; onChange: () => void; only?: Bucket[]; emptyText?: string }) {
   const { start, end } = todayBounds();
   const g = groupItems(items, new Date(), start, end);
   const order: Bucket[] = only ?? ["overdue", "today", "upcoming", "anytime", "snoozed"];
   const shown = order.filter((b) => g[b].length);
-  if (!shown.length) return <p className="muted center">Nothing here.</p>;
+  if (!shown.length) return <Empty icon="check">{emptyText ?? "All clear."}</Empty>;
   return (
     <>
       {shown.map((b) => (
         <section key={b}>
-          <h3>{LABELS[b]}</h3>
-          <ul className="items">
-            {g[b].map((i) => (
-              <ItemRow key={i.id} item={i} onChange={onChange} />
-            ))}
-          </ul>
+          <SectionH count={g[b].length}>
+            <span className={b === "overdue" ? "tone-bad" : undefined}>{LABELS[b]}</span>
+          </SectionH>
+          <ItemList items={g[b]} onChange={onChange} />
         </section>
       ))}
     </>
@@ -77,19 +131,13 @@ export function DoneList() {
     load();
   }, []);
   if (!items) return <p className="muted center">Loading…</p>;
-  if (!items.length) return <p className="muted center">Nothing done yet.</p>;
-  return (
-    <ul className="items">
-      {items.map((i) => (
-        <ItemRow key={i.id} item={i} onChange={load} />
-      ))}
-    </ul>
-  );
+  if (!items.length) return <Empty icon="check">Nothing done yet.</Empty>;
+  return <ItemList items={items} onChange={load} />;
 }
 
 export function ItemDetail({ id, people, onBack }: { id: string; people: Person[]; onBack: () => void }) {
   const [item, setItem] = useState<Item | null>(null);
-  const [edit, setEdit] = useState<"" | "title" | "details" | "for" | "by" | "when">("");
+  const [edit, setEdit] = useState<"" | "title" | "details" | "for" | "by" | "when" | "attrs">("");
   const [draft, setDraft] = useState("");
   const [err, setErr] = useState("");
 
@@ -108,6 +156,11 @@ export function ItemDetail({ id, people, onBack }: { id: string; people: Person[
       setErr(errText(e));
     }
   }
+  async function act(action: string) {
+    haptic();
+    const r = await api<{ item: Item }>(`/api/items/${id}/act`, { body: { action } });
+    setItem(r.item);
+  }
   async function remove() {
     if (!confirm("Delete this item and its original note for good?")) return;
     try {
@@ -119,11 +172,19 @@ export function ItemDetail({ id, people, onBack }: { id: string; people: Person[
   }
 
   if (!item) return <p className="muted center">{err || "Loading…"}</p>;
+  const c = category(item.subtype);
+  const attrs = (item.attrs ?? {}) as Attrs;
   return (
-    <div className="card detail">
-      <button className="link" onClick={onBack}>
-        ← Back
-      </button>
+    <div className="detail">
+      <Back onClick={onBack} />
+      <div className="row">
+        {c && (
+          <span className={`badge-icon tint-bg g-${c.group}`}>
+            <Icon name={c.icon} size={20} />
+          </span>
+        )}
+        <span className="muted small">{c?.label ?? item.kind}</span>
+      </div>
       {edit === "title" ? (
         <form
           onSubmit={(e) => {
@@ -134,58 +195,199 @@ export function ItemDetail({ id, people, onBack }: { id: string; people: Person[
           <input value={draft} onChange={(e) => setDraft(e.target.value)} autoFocus />
         </form>
       ) : (
-        <h2
+        <h1
+          className="largetitle"
           onClick={() => {
             setDraft(item.title);
             setEdit("title");
           }}
         >
           {item.title}
-        </h2>
+        </h1>
       )}
-      <dl>
-        <dt>Kind</dt>
-        <dd>{item.kind}</dd>
-        <dt>When</dt>
-        <dd onClick={() => setEdit("when")}>{when(item) ?? "—"}</dd>
-        <dt>For</dt>
-        <dd onClick={() => setEdit("for")}>{item.for_person?.name ?? "—"}</dd>
-        <dt>Asked by</dt>
-        <dd onClick={() => setEdit("by")}>{item.requested_by?.name ?? "—"}</dd>
-        <dt>Place</dt>
-        <dd>{item.place_hint ?? "—"}</dd>
-        <dt>Details</dt>
-        <dd
+      {item.status_line && <p className={`tone-${item.status_line.tone}`}>{item.status_line.text}</p>}
+
+      <div className="card tight kv">
+        <div className="k">When</div>
+        <div className="v tap" onClick={() => setEdit("when")}>
+          {when(item) ?? "—"}
+          {item.recurrence_text ? ` · ${item.recurrence_text}` : ""}
+        </div>
+        {(c ? c.person : true) && (
+          <>
+            <div className="k">{c?.person ?? "For"}</div>
+            <div className="v tap" onClick={() => setEdit("for")}>
+              {item.for_person?.name ?? "—"}
+            </div>
+          </>
+        )}
+        {(!c || c.subtype === "follow_up" || item.requested_by) && (
+          <>
+            <div className="k">Asked by</div>
+            <div className="v tap" onClick={() => setEdit("by")}>
+              {item.requested_by?.name ?? "—"}
+            </div>
+          </>
+        )}
+        {item.thing && (
+          <>
+            <div className="k">About</div>
+            <div className="v">
+              <a href={`#/thing/${item.thing.id}`}>{item.thing.name}</a>
+            </div>
+          </>
+        )}
+        {c?.fields
+          .filter((f) => attrs[f.key] != null)
+          .map((f) => (
+            <FieldRow key={f.key} label={f.label} value={formatAttr(f, attrs[f.key])} url={f.type === "url" ? String(attrs[f.key]) : null} phone={f.type === "phone" ? String(attrs[f.key]) : null} />
+          ))}
+        {item.place_hint && (
+          <>
+            <div className="k">Place</div>
+            <div className="v">{item.place_hint}</div>
+          </>
+        )}
+        <div className="k">Details</div>
+        <div
+          className="v tap"
           onClick={() => {
             setDraft(item.details ?? "");
             setEdit("details");
           }}
         >
           {item.details ?? "—"}
-        </dd>
-        <dt>Captured</dt>
-        <dd>{ago(item.created_at)}</dd>
-        <dt>Status</dt>
-        <dd>{item.status}</dd>
-      </dl>
-      {edit === "details" && (
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            patch({ details: draft || null });
-          }}
-        >
-          <textarea value={draft} onChange={(e) => setDraft(e.target.value)} rows={4} />
-          <button className="primary">Save</button>
-        </form>
+        </div>
+        <div className="k">Captured</div>
+        <div className="v">{ago(item.created_at)}</div>
+      </div>
+      {c && (
+        <button className="btn block" onClick={() => setEdit("attrs")}>
+          Edit {c.label.toLowerCase()} details
+        </button>
       )}
-      {edit === "when" && <WhenEdit item={item} onSave={patch} />}
-      {edit === "for" && <PersonPick people={people} value={item.for_person?.id ?? null} onSave={(v) => patch({ for_person_id: v })} />}
-      {edit === "by" && <PersonPick people={people} value={item.requested_by?.id ?? null} onSave={(v) => patch({ requested_by_person_id: v })} />}
+
+      {edit === "details" && (
+        <Sheet title="Details" onClose={() => setEdit("")}>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              patch({ details: draft || null });
+            }}
+          >
+            <textarea value={draft} onChange={(e) => setDraft(e.target.value)} rows={5} autoFocus />
+            <button className="btn primary block">Save</button>
+          </form>
+        </Sheet>
+      )}
+      {edit === "when" && (
+        <Sheet title="When" onClose={() => setEdit("")}>
+          <WhenEdit item={item} onSave={patch} />
+        </Sheet>
+      )}
+      {edit === "for" && (
+        <Sheet title={c?.person ?? "For"} onClose={() => setEdit("")}>
+          <PersonPick people={people} value={item.for_person?.id ?? null} onSave={(v) => patch({ for_person_id: v })} />
+        </Sheet>
+      )}
+      {edit === "by" && (
+        <Sheet title="Asked by" onClose={() => setEdit("")}>
+          <PersonPick people={people} value={item.requested_by?.id ?? null} onSave={(v) => patch({ requested_by_person_id: v })} />
+        </Sheet>
+      )}
+      {edit === "attrs" && c && (
+        <Sheet title={`${c.label} details`} onClose={() => setEdit("")}>
+          <AttrsForm
+            subtype={c.subtype}
+            initial={attrs}
+            onSave={async (a) => {
+              try {
+                const r = await api<{ item: Item }>(`/api/life/items/${id}`, { method: "PATCH", body: { attrs: a } });
+                setItem(r.item);
+                setEdit("");
+              } catch (e) {
+                setErr(errText(e));
+              }
+            }}
+          />
+        </Sheet>
+      )}
       {err && <p className="error">{err}</p>}
-      <button className="danger link" onClick={remove}>
-        Delete for good
-      </button>
+      <div className="stack">
+        {item.status === "open" ? (
+          <button className="btn primary block" onClick={() => act("done")}>
+            <Icon name="check" /> {item.recurrence ? "Done for this time" : item.subtype === "debt" ? "Mark settled" : "Mark done"}
+          </button>
+        ) : (
+          <button className="btn block" onClick={() => act("reopen")}>
+            Reopen
+          </button>
+        )}
+        <button className="btn ghost danger" onClick={remove}>
+          <Icon name="trash" size={18} /> Delete for good
+        </button>
+      </div>
     </div>
+  );
+}
+
+function FieldRow({ label, value, url, phone }: { label: string; value: string; url: string | null; phone: string | null }) {
+  return (
+    <>
+      <div className="k">{label}</div>
+      <div className="v">
+        {url ? (
+          <a href={url} target="_blank" rel="noopener noreferrer nofollow">
+            {new URL(url).hostname}
+          </a>
+        ) : phone ? (
+          <a href={`tel:${phone.replace(/[^\d+]/g, "")}`}>{value}</a>
+        ) : (
+          value
+        )}
+      </div>
+    </>
+  );
+}
+
+/** A form generated from the category registry. Money is entered as text ("$40", "12,50 EUR"). */
+export function AttrsForm({ subtype, initial, onSave, submitLabel = "Save" }: { subtype: string; initial: Attrs; onSave: (a: Record<string, unknown>) => void; submitLabel?: string }) {
+  const c = category(subtype)!;
+  const [v, setV] = useState<Record<string, string>>(() =>
+    Object.fromEntries(c.fields.map((f) => [f.key, initial[f.key] == null ? "" : f.type === "money" ? formatAttr(f, initial[f.key]) : String(initial[f.key])])),
+  );
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        onSave(Object.fromEntries(Object.entries(v).filter(([, x]) => x.trim() !== "")));
+      }}
+    >
+      {c.fields.map((f) => (
+        <label className="field" key={f.key}>
+          {f.label}
+          {f.required ? " *" : ""}
+          {f.type === "enum" ? (
+            <select value={v[f.key]} onChange={(e) => setV({ ...v, [f.key]: e.target.value })}>
+              <option value="">—</option>
+              {f.options!.map((o) => (
+                <option key={o} value={o}>
+                  {f.optionLabels?.[o] ?? o}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <input
+              type={f.type === "date" ? "date" : f.type === "number" ? "number" : f.type === "url" ? "url" : f.type === "phone" ? "tel" : "text"}
+              inputMode={f.type === "money" ? "decimal" : f.type === "number" ? "numeric" : undefined}
+              value={v[f.key]}
+              placeholder={f.placeholder ?? (f.type === "money" ? "e.g. 40 or 40 EUR" : undefined)}
+              onChange={(e) => setV({ ...v, [f.key]: e.target.value })}
+            />
+          )}
+        </label>
+      ))}
+      <button className="btn primary block">{submitLabel}</button>
+    </form>
   );
 }

@@ -1,4 +1,6 @@
+import { rollRecurring } from "../core/recurring";
 import { snoozeUntil, type ReminderSettings } from "../core/reminders";
+import { syncItemTriggers } from "../engine";
 import { addDays, civilOf, parseCivil, resolveTimeRef, startOfLocalDay } from "../core/time";
 import { HttpError, json, readJson, str } from "../lib/http";
 import type { ItemRow, Repo } from "../repo";
@@ -105,6 +107,8 @@ export async function patchItem(repo: Repo, req: Request, id: string, tz: string
   sets.push("updated_at = ?");
   params.push(new Date().toISOString());
   await repo.db.prepare(`UPDATE items SET ${sets.join(", ")} WHERE id = ?`).bind(...params, id).run();
+  // Dates and people feed category triggers ("prepare 7 days before the recital").
+  if (row.subtype) await syncItemTriggers(repo, (await repo.getItemRow(id))!, tz);
   const fields = Object.keys(before).filter((k) => !k.startsWith("reminded_") && k !== "title_enc" && k !== "details_enc");
   await repo.event("correction", {
     itemId: id,
@@ -127,10 +131,18 @@ export async function actOnItem(repo: Repo, req: Request, id: string, rs: Remind
   const iso = now.toISOString();
   const nudge = typeof body.nudge_type === "string" ? body.nudge_type.slice(0, 40) : null;
   switch (body.action) {
-    case "done":
-      await repo.db.prepare("UPDATE items SET status = 'done', updated_at = ? WHERE id = ?").bind(iso, id).run();
-      await repo.event("done", { itemId: id, nudgeType: nudge });
+    case "done": {
+      // A recurring item (pills, filters, seasonal chores) moves to its next occurrence instead of closing.
+      const next = row.recurrence && row.status === "open" ? rollRecurring(row, row.recurrence, now, rs.tz) : null;
+      if (next) {
+        await repo.db
+          .prepare("UPDATE items SET window_start = ?, window_end = ?, due_at = ?, snoozed_until = NULL, reminded_start_at = NULL, reminded_end_at = NULL, updated_at = ? WHERE id = ?")
+          .bind(next.window_start, next.window_end, next.due_at, iso, id)
+          .run();
+      } else await repo.db.prepare("UPDATE items SET status = 'done', updated_at = ? WHERE id = ?").bind(iso, id).run();
+      await repo.event("done", { itemId: id, nudgeType: nudge, payload: next ? { recurring: true } : undefined });
       break;
+    }
     case "dismiss":
       await repo.db.prepare("UPDATE items SET status = 'dropped', updated_at = ? WHERE id = ?").bind(iso, id).run();
       await repo.event("dismiss", { itemId: id, nudgeType: nudge });
@@ -138,6 +150,8 @@ export async function actOnItem(repo: Repo, req: Request, id: string, rs: Remind
     case "reopen":
       await repo.db.prepare("UPDATE items SET status = 'open', updated_at = ? WHERE id = ?").bind(iso, id).run();
       await repo.event("reopen", { itemId: id });
+      // A reopened warranty or debt needs its reminders back.
+      if (row.subtype) await syncItemTriggers(repo, { ...row, status: "open" }, rs.tz);
       break;
     case "snooze": {
       if (typeof body.preset !== "string" || !SNOOZES.has(body.preset)) throw new HttpError(400, "bad_preset");

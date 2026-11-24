@@ -1,8 +1,15 @@
 import { answerQuestion, embed, giveAdvice, parseNote, type AnswerItem } from "../ai";
+import { category } from "../core/categories";
+import { classifyDomain, stricterDomain } from "../core/domain";
 import { cleanRelation, isSelfMention, matchPerson, normalizeMention, type Person, type PersonMention } from "../core/people";
 import { buildRecallQuery } from "../core/recall";
+import { firstWindow } from "../core/recurring";
+import { recurrenceToRule } from "../core/rrule";
 import { DISCLAIMERS, PARSER_VERSION, type CaptureOut, type ParseOutput, type RecallOut } from "../core/schema";
+import { matchThing, thingTokens } from "../core/things";
 import { civilOf, civilToIso, resolveTimeRef } from "../core/time";
+import { addFactSmart, applyCategory, resolveThing, things, updateThingAttrs } from "../engine";
+import { getSetting } from "../lib/settings";
 import { HttpError, json, readJson, str } from "../lib/http";
 import { ulid } from "../lib/ulid";
 import type { ItemRow, Repo } from "../repo";
@@ -88,13 +95,26 @@ export async function handleCapture(repo: Repo, req: Request, tz: string): Promi
     when: { type: "none", date: null, end_date: null, unit: null, offset: null, weekday: null, time: null },
     place_hint: null,
     confidence: 0,
+    subtype: "none",
+    attrs: [],
+    thing: null,
+    recurrence: null,
     facts: [],
     missing: [],
   };
 
   const forP = await resolveMention(repo, people, cap.for_person, true);
   const byP = await resolveMention(repo, people, cap.requested_by, true);
-  const win = resolveTimeRef(cap.when, now, tz);
+  let win = resolveTimeRef(cap.when, now, tz);
+  const rrule = recurrenceToRule(cap.recurrence);
+  // A repeating item with no date starts at its next occurrence ("change the AC filter every 3 months").
+  const first = rrule && !win ? firstWindow(rrule, now, tz) : null;
+  if (first) win = { startDate: "", endDate: "", start: new Date(first.window_start!), end: new Date(first.window_end!), dueAt: null };
+  if (rrule && win && !win.dueAt && cap.when.time) {
+    // "every morning at 8": keep the time on the first occurrence.
+    const r = resolveTimeRef({ type: "date", date: civilToIso(civilOf(win.start, tz)), time: cap.when.time }, now, tz);
+    if (r) win = r;
+  }
 
   const captureId = ulid();
   const itemId = ulid();
@@ -120,8 +140,8 @@ export async function handleCapture(repo: Repo, req: Request, tz: string): Promi
     repo.db
       .prepare(
         `INSERT INTO items (id, capture_id, kind, title_enc, details_enc, for_person_id, requested_by_person_id,
-          window_start, window_end, due_at, status, place_hint, confidence, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?)`,
+          window_start, window_end, due_at, status, place_hint, confidence, recurrence, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?)`,
       )
       .bind(
         itemId,
@@ -136,33 +156,43 @@ export async function handleCapture(repo: Repo, req: Request, tz: string): Promi
         win?.dueAt ? win.dueAt.toISOString() : null,
         cap.place_hint?.slice(0, 100) ?? null,
         confidence,
+        rrule,
         iso,
         iso,
       ),
   ]);
 
-  // Told facts.
-  for (const f of cap.facts.slice(0, 5)) {
-    const subj = f.subject ? await resolveMention(repo, people, f.subject, true) : null;
+  // Category: typed attributes, the thing it is about, triggers ("30 days before the warranty ends").
+  const cat = category(cap.subtype === "none" ? null : cap.subtype);
+  const known = await things(repo);
+  const thing = cap.thing?.name ? await resolveThing(repo, known, cap.thing.name, cap.thing.kind) : null;
+  if (cat) {
+    const currency = (await getSetting(repo.db, "currency")) ?? "USD";
+    await applyCategory(repo, itemId, { subtype: cat.subtype, attrs: cap.attrs, thing: thing ? { name: thing.name, kind: thing.kind } : null, recurrence: rrule }, tz, currency);
+  }
+
+  // Told facts: about a person, the user, or the thing ("spare key is in the blue drawer").
+  for (const f of cap.facts.slice(0, 6)) {
     const key = f.key.toLowerCase().replace(/[^a-z0-9_]/g, "_").slice(0, 60);
     if (!key || !f.value) continue;
-    await repo.addFact({
-      subjectType: subj ? "person" : "me",
-      subjectId: subj?.id ?? null,
-      key,
-      value: f.value.slice(0, 500),
-      source: "told",
-    });
+    const value = f.value.slice(0, 500);
+    if (f.about_thing && thing) {
+      await addFactSmart(repo, { subjectType: "thing", subjectId: thing.id, key, value, source: "told" }, tz);
+      if (["location", "size", "model", "filter_size"].includes(key)) await updateThingAttrs(repo, thing.id, { [key]: value });
+      continue;
+    }
+    const subj = f.subject ? await resolveMention(repo, people, f.subject, true) : null;
+    await addFactSmart(repo, { subjectType: subj ? "person" : "me", subjectId: subj?.id ?? null, key, value, source: "told" }, tz);
   }
 
   // Ask once: the first missing fact the profile really lacks.
-  const known = new Set((await repo.activeFactKeys()).map((f) => `${f.subject_type}:${f.subject_id ?? ""}:${f.key}`));
+  const knownKeys = new Set((await repo.activeFactKeys()).map((f) => `${f.subject_type}:${f.subject_id ?? ""}:${f.key}`));
   let question: GapQuestion | null = null;
   for (const m of cap.missing) {
     const subj = m.subject ? await resolveMention(repo, people, m.subject, false) : null;
     const key = m.key.toLowerCase().replace(/[^a-z0-9_]/g, "_").slice(0, 60);
     const type = subj ? "person" : "me";
-    if (!key || known.has(`${type}:${subj?.id ?? ""}:${key}`)) continue;
+    if (!key || knownKeys.has(`${type}:${subj?.id ?? ""}:${key}`)) continue;
     question = { subject_type: type, subject_id: subj?.id ?? null, subject_name: subj?.name ?? "you", key, question: m.question.slice(0, 200) };
     break;
   }
@@ -186,6 +216,10 @@ function toAnswerItems(views: Awaited<ReturnType<Repo["itemViews"]>>, tz: string
     details: v.details,
     kind: v.kind,
     status: v.status,
+    subtype: v.subtype,
+    attrs: v.attrs,
+    status_line: v.status_line?.text ?? null,
+    thing: v.thing?.name ?? null,
     captured: fmt(v.created_at)!,
     scheduled: v.due_at ? fmt(v.due_at) : v.window_start ? `${fmt(v.window_start)}..${fmt(new Date(new Date(v.window_end!).getTime() - 1).toISOString())}` : null,
     for_person: v.for_person?.name ?? null,
@@ -193,45 +227,89 @@ function toAnswerItems(views: Awaited<ReturnType<Repo["itemViews"]>>, tz: string
   }));
 }
 
-/** On-demand advice, grounded in the profile (facts, people) and the notes closest to the question. */
+/** People named in a question, by name, alias or a unique relation ("my wife", "Emma"). */
+function peopleIn(question: string, people: Person[]): Person[] {
+  const q = ` ${normalizeMention(question)} `;
+  return people.filter((p) => {
+    if (p.relation === "self") return false;
+    const names = [p.name, ...p.aliases].map(normalizeMention).filter(Boolean);
+    if (names.some((n) => q.includes(` ${n} `))) return true;
+    return q.includes(` ${p.relation} `) && people.filter((x) => x.relation === p.relation).length === 1;
+  });
+}
+
+export interface Because {
+  ref: string;
+  text: string;
+}
+
+/** On-demand advice, grounded in the profile (facts, people), the people asked about, and the closest notes. */
 async function advise(repo: Repo, question: string, people: Person[], now: Date, tz: string) {
   const byId = new Map(people.map((p) => [p.id, p]));
   const { results } = await repo.db
-    .prepare("SELECT id, subject_type, subject_id, key, value_enc FROM facts WHERE active = 1 ORDER BY created_at DESC LIMIT 150")
-    .all<{ id: string; subject_type: string; subject_id: string | null; key: string; value_enc: string }>();
+    .prepare("SELECT id, subject_type, subject_id, key, value_enc, created_at FROM facts WHERE active = 1 AND subject_type != 'thing' ORDER BY created_at DESC LIMIT 150")
+    .all<{ id: string; subject_type: string; subject_id: string | null; key: string; value_enc: string; created_at: string }>();
   const facts = await Promise.all(
     results.map(async (f) => ({
       id: f.id,
       about: f.subject_type === "me" ? "me" : (byId.get(f.subject_id ?? "")?.name ?? f.subject_type),
       key: f.key,
       value: await repo.cipher.decrypt(f.value_enc, `facts:${f.id}:value`),
+      created_at: f.created_at,
     })),
   );
+  // Focus: what Muninn holds about the people in the question (gift ideas, debts, events), newest first.
+  const named = peopleIn(question, people);
+  let focusRows: ItemRow[] = [];
+  if (named.length) {
+    const ids = named.map((p) => p.id);
+    const ph = ids.map(() => "?").join(",");
+    focusRows = (
+      await repo.db
+        .prepare(
+          `SELECT * FROM items WHERE status = 'open' AND subtype IN ('gift_idea', 'debt', 'occasion', 'follow_up')
+           AND (for_person_id IN (${ph}) OR requested_by_person_id IN (${ph})) ORDER BY created_at DESC LIMIT 15`,
+        )
+        .bind(...ids, ...ids)
+        .all<ItemRow>()
+    ).results;
+  }
   let related: ItemRow[] = [];
   try {
     const hits = await searchVectors(repo.env, await embed(repo.env, question), 8);
-    if (hits.length) {
-      const ids = hits.map((h) => h.itemId);
+    const ids = hits.map((h) => h.itemId).filter((id) => !focusRows.some((r) => r.id === id));
+    if (ids.length) {
       related = (await repo.db.prepare(`SELECT * FROM items WHERE id IN (${ids.map(() => "?").join(",")})`).bind(...ids).all<ItemRow>()).results;
     }
   } catch (e) {
     console.warn("advice search failed", e instanceof Error ? e.message : e);
   }
-  const views = await repo.itemViews(related);
+  const views = await repo.itemViews([...focusRows, ...related]);
+  const focusViews = views.slice(0, focusRows.length);
+  const relatedViews = views.slice(focusRows.length);
   const self = people.find((p) => p.relation === "self");
   const adv = await giveAdvice(repo.env, question, {
     today: civilToIso(civilOf(now, tz)),
     me: self?.name ?? "me",
     people: people.filter((p) => p.relation !== "self").map((p) => ({ name: p.name, relation: p.relation })),
-    facts,
-    related: toAnswerItems(views, tz),
+    facts: facts.map(({ created_at: _c, ...f }) => f),
+    related: toAnswerItems(relatedViews, tz),
+    focus: toAnswerItems(focusViews, tz),
   });
-  if (!adv) return { answer: "I couldn't give advice on that one.", items: [], advice: true };
+  if (!adv) return { answer: "I couldn't give advice on that one.", items: [], advice: true, because: [], disclaimer: null };
   const cited = new Set(adv.cited_ids);
+  const day = (iso: string) => civilToIso(civilOf(new Date(iso), tz));
+  // "Because you told me X": built by code from the cited ids, so the user can spot a wrong memory.
+  const because: Because[] = [
+    ...facts.filter((f) => cited.has(f.id)).map((f) => ({ ref: f.id, text: `${f.about === "me" ? "Your" : `${f.about}'s`} ${f.key.replace(/_/g, " ")}: ${f.value} (told ${day(f.created_at)})` })),
+    ...views.filter((v) => cited.has(v.id)).map((v) => ({ ref: v.id, text: `You noted "${v.title}" (${day(v.created_at)})` })),
+  ];
+  // The stricter of the model's label and a keyword check, added by code so it is always there.
+  const domain = stricterDomain(adv.sensitive_domain, classifyDomain(question));
   return {
     answer: adv.answer,
-    // Added by code, not left to the model, so it is always there.
-    disclaimer: adv.sensitive_domain !== "none" ? DISCLAIMERS[adv.sensitive_domain] : null,
+    disclaimer: domain !== "none" ? DISCLAIMERS[domain] : null,
+    because,
     items: views.filter((v) => cited.has(v.id)),
     advice: true,
   };
@@ -255,7 +333,7 @@ async function recall(repo: Repo, question: string, r: RecallOut, people: Person
   let rows: ItemRow[] = [];
   if (r.mode === "filter") {
     const q = buildRecallQuery(
-      { requestedById: byP?.id ?? null, forPersonId: forP?.id ?? null, created: r.created, scheduled: r.scheduled, status: r.status, kind: r.kind },
+      { requestedById: byP?.id ?? null, forPersonId: forP?.id ?? null, created: r.created, scheduled: r.scheduled, status: r.status, kind: r.kind, subtype: r.subtype === "any" ? null : r.subtype },
       now,
       tz,
       20,
@@ -281,9 +359,25 @@ async function recall(repo: Repo, question: string, r: RecallOut, people: Person
     }
   }
 
-  if (!rows.length) return { answer: "I have nothing on that.", items: [] };
+  // Things: "where is the spare key", "what size is the furnace filter" answer from the thing's details and facts.
+  const thingItems: AnswerItem[] = [];
+  const topic = r.topic || question;
+  if (thingTokens(topic).length) {
+    const all = await things(repo);
+    const t = matchThing(all, topic) ?? all.find((x) => thingTokens(topic).some((tok) => thingTokens(x.name).includes(tok) && tok.length > 3)) ?? null;
+    if (t) {
+      const { results: tf } = await repo.db
+        .prepare("SELECT id, key, value_enc FROM facts WHERE subject_type = 'thing' AND subject_id = ? AND active = 1")
+        .bind(t.id)
+        .all<{ id: string; key: string; value_enc: string }>();
+      const details = { ...t.attrs, ...Object.fromEntries(await Promise.all(tf.map(async (f) => [f.key, await repo.cipher.decrypt(f.value_enc, `facts:${f.id}:value`)]))) };
+      thingItems.push({ id: t.id, title: t.name, details: JSON.stringify(details), kind: "thing", status: "open", captured: today, scheduled: null, for_person: null, requested_by: null });
+    }
+  }
+
+  if (!rows.length && !thingItems.length) return { answer: "I have nothing on that.", items: [] };
   const views = await repo.itemViews(rows);
-  const forModel = toAnswerItems(views, tz);
+  const forModel = [...thingItems, ...toAnswerItems(views, tz)];
   const ans = await answerQuestion(repo.env, question, forModel, today);
   if (!ans) return { answer: "I couldn't answer that one. Here is what matched.", items: views };
   const cited = new Set(ans.cited_ids);

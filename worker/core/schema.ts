@@ -1,5 +1,6 @@
 // The only shapes the model may return. Everything is validated before code acts on it.
 import { z } from "zod";
+import { SUBTYPES } from "./categories";
 
 export const PersonMentionSchema = z.object({
   mention: z.string().describe("How the person was referred to, as written: 'wife', 'Emma', 'my daughter'."),
@@ -32,15 +33,33 @@ export const CaptureSchema = z.object({
   when: TimeRefSchema.describe("When it should happen. type=none if no time was said."),
   place_hint: z.string().nullable().describe("Kind of place where it gets done, e.g. 'home goods store', 'pharmacy'. Null if none."),
   confidence: z.number().describe("0 to 1: how sure you are this reading is what the user meant."),
+  subtype: z.enum(["none", ...SUBTYPES]).describe("The category when one fits (see the subtype list), else none."),
+  attrs: z
+    .array(z.object({ key: z.string(), value: z.string() }))
+    .describe("Attributes for the subtype, keys from the subtype list only. Dates as YYYY-MM-DD, money as '40 USD'. Often empty."),
+  thing: z
+    .object({ name: z.string().describe("Short name: 'TV', 'car', 'spare car key', 'dishwasher'."), kind: z.string().describe("vehicle, appliance, key, document, device, furniture, other") })
+    .nullable()
+    .describe("The object the note is about, when it is something the user owns or looks after. Null otherwise."),
+  recurrence: z
+    .object({
+      freq: z.enum(["daily", "weekly", "monthly", "yearly"]),
+      interval: z.number().int().nullable().describe("Every N units; null for 1."),
+      by_month: z.array(z.number().int()).nullable().describe("Months 1-12 for yearly chores, e.g. [10] for every October."),
+      by_weekday: z.array(z.number().int()).nullable().describe("0=Sunday..6=Saturday, weekly only."),
+    })
+    .nullable()
+    .describe("Set only when the user says it repeats (every day, every 3 months, each October)."),
   facts: z
     .array(
       z.object({
-        subject: PersonMentionSchema.nullable().describe("Null when the fact is about the user."),
-        key: z.string().describe("snake_case, e.g. bed_size, shoe_size, allergies, car_model."),
-        value: z.string(),
+        subject: PersonMentionSchema.nullable().describe("Null when the fact is about the user or about the thing."),
+        about_thing: z.boolean().describe("True when the fact is about the thing above (its location, size, model)."),
+        key: z.string().describe("snake_case, e.g. bed_size, shoe_size, allergies, teacher, likes, birthday, location, filter_size."),
+        value: z.string().describe("For date keys (birthday, anniversary, passport_expiry, last_tetanus, ...): YYYY-MM-DD, or --MM-DD when the year is unknown."),
       }),
     )
-    .describe("Durable facts stated in the text, e.g. 'daughter's bed is a full'. Often empty."),
+    .describe("Durable facts stated in the text, e.g. 'daughter's bed is a full', 'Emma's birthday is March 3'. Often empty."),
   missing: z
     .array(
       z.object({
@@ -60,6 +79,7 @@ export const RecallSchema = z.object({
   scheduled: TimeRefSchema.describe("When the item is due/scheduled. type=none if not asked."),
   status: z.enum(["open", "done", "dropped", "any"]),
   kind: z.enum(["task", "note", "fact", "event", "any"]),
+  subtype: z.enum(["any", ...SUBTYPES]).describe("Category asked about ('who owes me money' = debt, 'my ideas this week' = idea), else any."),
   topic: z.string().nullable().describe("The subject being asked about, for semantic search, e.g. 'my car'."),
 });
 
@@ -96,4 +116,10 @@ export const AnswerSchema = z.object({
 });
 export type AnswerOut = z.infer<typeof AnswerSchema>;
 
-export const PARSER_VERSION = "parse-v1";
+export const PARSER_VERSION = "parse-v2";
+
+/** Model rewording of code-written tips. Each text is checked by rewordIsFaithful before use. */
+export const TipWordingSchema = z.object({
+  tips: z.array(z.object({ id: z.string(), text: z.string().describe("One or two short sentences.") })),
+});
+export type TipWordingOut = z.infer<typeof TipWordingSchema>;
