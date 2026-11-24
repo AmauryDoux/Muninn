@@ -120,3 +120,30 @@ describe("shortcut capture", () => {
     expect((await shortcut("one more")).status).toBe(429);
   });
 });
+
+describe("calendar feed", () => {
+  async function calToken() {
+    const repo = new Repo(env, await Cipher.fromSecret(KEY), "America/Chicago");
+    const r = await createToken(repo, new Request("https://m.test/api/tokens", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ scope: "calendar" }) }));
+    return ((await r.json()) as { token: string }).token;
+  }
+
+  it("serves dated items as iCalendar with a calendar token only", async () => {
+    await shortcut("call mom"); // undated: not in the feed
+    const cipher = await Cipher.fromSecret(KEY);
+    const start = new Date(Date.now() + 86400_000).toISOString();
+    await env.DB.prepare("INSERT INTO items (id, kind, title_enc, status, window_start, window_end, due_at, created_at, updated_at) VALUES ('01J0000000000000000000000Z', 'event', ?, 'open', ?, ?, ?, ?, ?)")
+      .bind(await cipher.encrypt("Dentist", "items:01J0000000000000000000000Z:title"), start, start, start, start, start)
+      .run();
+    const cal = await calToken();
+    const r = await worker.fetch(new Request(`https://m.test/api/calendar/${cal}.ics`), env);
+    expect(r.status).toBe(200);
+    expect(r.headers.get("Content-Type")).toContain("text/calendar");
+    const body = await r.text();
+    expect(body).toContain("SUMMARY:Dentist");
+    expect(body).not.toContain("Call mom");
+    // A capture token can't read the calendar, and a calendar token can't add notes.
+    expect((await worker.fetch(new Request(`https://m.test/api/calendar/${token}.ics`), env)).status).toBe(404);
+    expect((await shortcut("x", { Authorization: `Bearer ${cal}` })).status).toBe(401);
+  });
+});

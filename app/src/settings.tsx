@@ -422,10 +422,20 @@ function Shortcuts({ onMsg }: { onMsg: (m: string) => void }) {
       onMsg(errText(e));
     }
   }
+  const [calLink, setCalLink] = useState<string | null>(null);
+  async function createCalendar() {
+    try {
+      const r = await api<{ token: string }>("/api/tokens", { body: { scope: "calendar", label: "Calendar" } });
+      setCalLink(`webcal://${location.host}/api/calendar/${r.token}.ics`);
+      load();
+    } catch (e) {
+      onMsg(errText(e));
+    }
+  }
   const copy = (t: string) => navigator.clipboard?.writeText(t).then(() => onMsg("Copied."), () => onMsg("Copy failed; select the text instead."));
   return (
     <section className="card">
-      <h3>Siri, Action button and Share</h3>
+      <h3>Siri, Action button, Share and Calendar</h3>
       <p className="muted small">
         A Shortcut can send a note to Muninn without opening the app. Its key can only add notes: it cannot read, search or change anything.
       </p>
@@ -454,6 +464,28 @@ function Shortcuts({ onMsg }: { onMsg: (m: string) => void }) {
       ) : (
         <button className="btn" onClick={create}>
           Create a Shortcut key
+        </button>
+      )}
+      <hr />
+      <p className="small">Calendar: see dated items in the iPhone Calendar app.</p>
+      <p className="muted tiny">
+        Read-only, titles and dates only. The link is the key, so treat it like a password. If your iPhone syncs subscriptions through iCloud,
+        Apple's servers fetch the titles. Revoke it below any time.
+      </p>
+      {calLink ? (
+        <div className="notice">
+          <code className="token">{calLink}</code>
+          <div className="row">
+            <a className="btn primary small" href={calLink}>
+              Subscribe
+            </a>
+            <button className="btn small" onClick={() => copy(calLink)}>Copy link</button>
+            <button className="btn ghost small" onClick={() => setCalLink(null)}>Done</button>
+          </div>
+        </div>
+      ) : (
+        <button className="btn" onClick={createCalendar}>
+          Add to Calendar
         </button>
       )}
       <ul className="plain">

@@ -39,7 +39,7 @@ import {
 } from "./routes/life";
 import { runScheduled } from "./scheduled";
 import { getReview } from "./routes/review";
-import { createToken, deleteToken, listTokens, shortcutCapture } from "./routes/tokens";
+import { calendarFeed, createToken, deleteToken, listTokens, shortcutCapture } from "./routes/tokens";
 
 let cipherCache: { key: string; cipher: Promise<Cipher> } | null = null;
 function getCipher(env: Env): Promise<Cipher> {
@@ -60,6 +60,10 @@ async function api(req: Request, env: Env): Promise<Response> {
     if (m !== "POST") throw new HttpError(405, "method_not_allowed");
     return shortcutCapture(env, req, await getCipher(env));
   }
+
+  // Calendar subscription: read-only, token in the URL (calendar apps can't send headers).
+  const cal = path.match(/^\/api\/calendar\/(mnn_[A-Za-z0-9_-]{20,80})\.ics$/);
+  if (cal && (m === "GET" || m === "HEAD")) return calendarFeed(env, req, await getCipher(env), cal[1]);
 
   // CSRF defence in depth (cookies are already SameSite=Strict): state-changing calls must come from our own origin.
   if (m !== "GET" && m !== "HEAD") {
