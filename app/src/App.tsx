@@ -100,6 +100,13 @@ function Main({ hasPasskey, onSignedOut, onPasskeyAdded }: { hasPasskey: boolean
   const loadPeople = useCallback(() => api<{ people: Person[] }>("/api/people").then((r) => setPeople(r.people)), []);
   const loadBrief = useCallback(() => api<Brief>("/api/brief").then(setBrief).catch(() => {}), []);
 
+  // A typed name in a form may have created a person: reload the list everywhere.
+  useEffect(() => {
+    const on = () => void loadPeople();
+    window.addEventListener("muninn:people", on);
+    return () => window.removeEventListener("muninn:people", on);
+  }, [loadPeople]);
+
   useEffect(() => {
     if (loaded.current) return;
     loaded.current = true;

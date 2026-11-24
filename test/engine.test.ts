@@ -6,7 +6,7 @@ import type { Env } from "../worker/env";
 import { Cipher } from "../worker/lib/crypto";
 import { ulid } from "../worker/lib/ulid";
 import { Repo } from "../worker/repo";
-import { actOnItem } from "../worker/routes/items";
+import { actOnItem, patchItem } from "../worker/routes/items";
 import { handleCapture } from "../worker/routes/capture";
 import { getUsage } from "../worker/routes/misc";
 import { createLifeItem, lifeSummary, listThings, patchLifeItem } from "../worker/routes/life";
@@ -208,5 +208,25 @@ describe("AI failure is visible", () => {
     expect(b.ai_error).toContain("ANTHROPIC_API_KEY");
     const u = await body<{ last_error: { job: string; message: string } | null }>(await getUsage(repo, new URL("https://m.test/api/usage")));
     expect(u.last_error).toMatchObject({ job: "parse" });
+  });
+});
+
+describe("typed person names", () => {
+  it("matches an existing person by name or relation, creates a new one otherwise, and clears", async () => {
+    const sarah = await repo.createPerson("Sarah", "wife", ["wife"]);
+    const mk = async (name: string) =>
+      body<{ item: { id: string; for_person: { id: string; name: string } | null } }>(await createLifeItem(repo, req({ subtype: "occasion", title: "Dinner", for_person_name: name, date: "2026-12-20" }), TZ));
+    expect((await mk("sarah")).item.for_person?.id).toBe(sarah.id);
+    expect((await mk("my wife")).item.for_person?.id).toBe(sarah.id);
+    const lisa = (await mk("Aunt Lisa")).item;
+    expect(lisa.for_person?.name).toBe("Aunt Lisa");
+    expect((await repo.people()).filter((p) => p.name === "Aunt Lisa")).toHaveLength(1);
+    expect((await mk("Aunt Lisa")).item.for_person?.id).toBe(lisa.for_person?.id);
+    expect((await mk("me")).item.for_person).toBeNull();
+    const patched = await body<{ item: { for_person: unknown; requested_by: { name: string } | null } }>(
+      await patchItem(repo, new Request("https://m.test/api/x", { method: "PATCH", headers: { "Content-Type": "application/json", Origin: "https://m.test" }, body: JSON.stringify({ for_person_name: "", requested_by_name: "Dana" }) }), lisa.id, TZ),
+    );
+    expect(patched.item.for_person).toBeNull();
+    expect(patched.item.requested_by?.name).toBe("Dana");
   });
 });

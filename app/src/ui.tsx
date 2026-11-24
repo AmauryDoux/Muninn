@@ -1,5 +1,6 @@
 // Small shared UI pieces: sheets, section headers, empty states, haptics.
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
+import type { Person } from "./api";
 import { Icon } from "./icons";
 
 /** A light tap where supported (Android). iOS web apps have no vibration API; the press animation stands in. */
@@ -76,3 +77,53 @@ export const DOMAIN_NOTE: Record<string, string> = {
   finance: "General information, not financial advice.",
   legal: "General information, not legal advice.",
 };
+
+/** Tell the app a person may have been created, so every screen reloads the people list. */
+export function peopleChanged() {
+  window.dispatchEvent(new Event("muninn:people"));
+}
+
+const norm = (s: string) => s.toLowerCase().normalize("NFKC").trim();
+
+/**
+ * Type a name: existing people are suggested as you type (name, nickname or relation),
+ * and a name that matches nobody is created when the form is saved.
+ */
+export function PersonInput({ people, value, onChange, placeholder = "Type a name", autoFocus }: { people: Person[]; value: string; onChange: (v: string) => void; placeholder?: string; autoFocus?: boolean }) {
+  const [focused, setFocused] = useState(false);
+  const q = norm(value);
+  const others = people.filter((p) => p.relation !== "self");
+  const exact = others.find((p) => norm(p.name) === q);
+  const hits = others
+    .filter((p) => !q || norm(p.name).includes(q) || p.aliases.some((a) => norm(a).includes(q)) || norm(p.relation).startsWith(q))
+    .slice(0, 6);
+  return (
+    <div className="person-input">
+      <input
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onFocus={() => setFocused(true)}
+        onBlur={() => setTimeout(() => setFocused(false), 150)}
+        placeholder={placeholder}
+        autoFocus={autoFocus}
+        autoComplete="off"
+        autoCapitalize="words"
+        enterKeyHint="done"
+        maxLength={80}
+      />
+      {focused && hits.length > 0 && !exact && (
+        <div className="chips suggest" role="listbox">
+          {hits.map((p) => (
+            <button type="button" role="option" aria-selected={false} key={p.id} className="chip" onMouseDown={(e) => e.preventDefault()} onClick={() => onChange(p.name)}>
+              {p.name}
+              {p.relation !== "other" && <span className="muted"> · {p.relation}</span>}
+            </button>
+          ))}
+        </div>
+      )}
+      {q && !exact && !(focused && hits.length) && !["me", "myself", "i"].includes(q) && (
+        <p className="muted small">New person: “{value.trim()}” will be added.</p>
+      )}
+    </div>
+  );
+}
