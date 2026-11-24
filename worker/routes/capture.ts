@@ -77,7 +77,12 @@ async function resolveMention(
   return p;
 }
 
-export async function handleCapture(repo: Repo, req: Request, tz: string): Promise<Response> {
+export interface CaptureOptions {
+  /** From a capture-only token (iOS Shortcut): questions are saved as notes, never answered. */
+  captureOnly?: boolean;
+}
+
+export async function handleCapture(repo: Repo, req: Request, tz: string, opts: CaptureOptions = {}): Promise<Response> {
   const body = await readJson<{ text?: unknown; source?: unknown; client_id?: unknown; captured_at?: unknown }>(req);
   const text = str(body.text, "text", MAX_NOTE).trim();
   if (!text) throw new HttpError(400, "empty");
@@ -113,9 +118,14 @@ export async function handleCapture(repo: Repo, req: Request, tz: string): Promi
     model = null;
   }
 
-  if (!aiError && out && out.intent === "capture" && !out.capture) aiError = "The model returned no capture.";
+  if (!aiError && out && out.intent === "capture" && !out.capture && !opts.captureOnly) aiError = "The model returned no capture.";
   if (!aiError && !out && model) aiError = "The model declined to read this note.";
 
+  if (opts.captureOnly && out && out.intent !== "capture") {
+    // A token may only add. A question ("what did my wife ask me?") is kept as a note instead of being answered,
+    // so a leaked token can never read anything back.
+    out = { ...out, intent: "capture", recall: null, capture: null };
+  }
   if (out?.intent === "recall" && out.recall) {
     return json({ type: "answer", ...(await recall(repo, text, out.recall, people, now, tz)) });
   }

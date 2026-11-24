@@ -37,6 +37,7 @@ import {
   upcoming,
 } from "./routes/life";
 import { runScheduled } from "./scheduled";
+import { createToken, deleteToken, listTokens, shortcutCapture } from "./routes/tokens";
 
 let cipherCache: { key: string; cipher: Promise<Cipher> } | null = null;
 function getCipher(env: Env): Promise<Cipher> {
@@ -50,6 +51,13 @@ async function api(req: Request, env: Env): Promise<Response> {
   const url = new URL(req.url);
   const path = url.pathname;
   const m = req.method;
+
+  // iOS Shortcuts: bearer token, capture only, no cookie read. Shortcuts send no Origin, so this one path is checked
+  // before the Origin rule below; it never uses the session cookie, so it is not a CSRF target.
+  if (path === "/api/shortcut/capture") {
+    if (m !== "POST") throw new HttpError(405, "method_not_allowed");
+    return shortcutCapture(env, req, await getCipher(env));
+  }
 
   // CSRF defence in depth (cookies are already SameSite=Strict): state-changing calls must come from our own origin.
   if (m !== "GET" && m !== "HEAD") {
@@ -133,6 +141,14 @@ async function api(req: Request, env: Env): Promise<Response> {
     requireFresh(session);
     return exportAll(repo);
   }
+
+  // Capture tokens: creating one hands out a credential, so it needs a fresh Face ID or password check.
+  if (path === "/api/tokens" && m === "GET") return listTokens(repo);
+  if (path === "/api/tokens" && m === "POST") {
+    requireFresh(session);
+    return createToken(repo, req);
+  }
+  if ((mm = path.match(new RegExp(`^/api/tokens/${ID}$`))) && m === "DELETE") return deleteToken(repo, mm[1]);
 
   if (path === "/api/push/subscribe" && m === "POST") return subscribePush(repo, req);
   if (path === "/api/push/unsubscribe" && m === "POST") return unsubscribePush(repo, req);

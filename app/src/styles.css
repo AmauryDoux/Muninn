@@ -392,3 +392,20 @@ a.tile, a.stat { color: var(--text); }
 .person-input { display: flex; flex-direction: column; gap: 8px; }
 .person-input .chips.suggest { display: flex; flex-wrap: wrap; gap: 6px; }
 .person-input p { margin: 0; }
+/* Shortcut key: long, must wrap and be selectable. */
+code.token {
+  display: block;
+  word-break: break-all;
+  user-select: all;
+  -webkit-user-select: all;
+  padding: 8px 10px;
+  margin: 8px 0;
+  border-radius: 10px;
+  background: rgba(127, 127, 127, 0.15);
+  font-size: 13px;
+}
+ol.steps {
+  padding-left: 20px;
+  margin-top: 10px;
+  line-height: 1.5;
+}

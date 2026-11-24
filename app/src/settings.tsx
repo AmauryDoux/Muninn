@@ -145,6 +145,8 @@ export function Settings({ onSignedOut }: { onSignedOut: () => void }) {
 
       <LifeSettings settings={s.settings} onMsg={setMsg} />
 
+      <Shortcuts onMsg={setMsg} />
+
       <section className="card">
         <h3>Sign-in</h3>
         <ul className="plain">
@@ -372,6 +374,79 @@ function Usage() {
           </table>
         </>
       )}
+    </section>
+  );
+}
+
+interface TokenRow {
+  id: string;
+  label: string;
+  created_at: string;
+  last_used_at: string | null;
+}
+
+/** Capture-only tokens for an iOS Shortcut: Action button, "Hey Siri, tell Muninn", or the Share sheet. */
+function Shortcuts({ onMsg }: { onMsg: (m: string) => void }) {
+  const [tokens, setTokens] = useState<TokenRow[]>([]);
+  const [fresh, setFresh] = useState<string | null>(null);
+  const load = () => api<{ tokens: TokenRow[] }>("/api/tokens").then((r) => setTokens(r.tokens));
+  useEffect(() => {
+    load().catch(() => {});
+  }, []);
+  const url = `${location.origin}/api/shortcut/capture`;
+  async function create() {
+    try {
+      const r = await api<{ token: string }>("/api/tokens", { body: { label: "iPhone Shortcut" } });
+      setFresh(r.token);
+      load();
+    } catch (e) {
+      onMsg(errText(e));
+    }
+  }
+  const copy = (t: string) => navigator.clipboard?.writeText(t).then(() => onMsg("Copied."), () => onMsg("Copy failed; select the text instead."));
+  return (
+    <section className="card">
+      <h3>Siri, Action button and Share</h3>
+      <p className="muted small">
+        A Shortcut can send a note to Muninn without opening the app. Its key can only add notes: it cannot read, search or change anything.
+      </p>
+      {fresh ? (
+        <div className="notice">
+          <p className="small">
+            Copy this key now. It is shown only once.
+          </p>
+          <code className="token">{fresh}</code>
+          <div className="row">
+            <button className="btn small" onClick={() => copy(fresh)}>Copy key</button>
+            <button className="btn small" onClick={() => copy(url)}>Copy address</button>
+            <button className="btn ghost small" onClick={() => setFresh(null)}>Done</button>
+          </div>
+          <ol className="small steps">
+            <li>In Shortcuts, make a new shortcut named "Tell Muninn".</li>
+            <li>Add "Dictate Text" (or "Receive input from Share Sheet" for sharing text).</li>
+            <li>
+              Add "Get Contents of URL": the address above, Method POST, Header <code>Authorization</code> = <code>Bearer</code> + space + the key,
+              Request Body "File" set to the dictated text.
+            </li>
+            <li>Add "Get Dictionary Value" for key <code>say</code>, then "Show Notification" (or "Speak Text").</li>
+            <li>Settings → Action Button → Shortcut → Tell Muninn. Siri works with "Hey Siri, Tell Muninn".</li>
+          </ol>
+        </div>
+      ) : (
+        <button className="btn" onClick={create}>
+          Create a Shortcut key
+        </button>
+      )}
+      <ul className="plain">
+        {tokens.map((t) => (
+          <li key={t.id}>
+            {t.label} <span className="muted small">made {ago(t.created_at)}{t.last_used_at ? `, used ${ago(t.last_used_at)}` : ", never used"}</span>{" "}
+            <button className="btn ghost small danger" onClick={() => api(`/api/tokens/${t.id}`, { method: "DELETE" }).then(load).catch((e) => onMsg(errText(e)))}>
+              Revoke
+            </button>
+          </li>
+        ))}
+      </ul>
     </section>
   );
 }
