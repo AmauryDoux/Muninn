@@ -24,7 +24,9 @@ export async function logUsage(
  */
 export async function logModelError(db: D1Database, job: string, e: unknown): Promise<string> {
   const status = typeof (e as { status?: unknown })?.status === "number" ? (e as { status: number }).status : null;
-  const raw = e instanceof Error ? e.message : String(e);
+  // SDK errors carry the API's JSON body; its error.message is the readable part ("Invalid bearer token").
+  const apiMsg = (e as { error?: { error?: { message?: unknown } } })?.error?.error?.message;
+  const raw = typeof apiMsg === "string" ? apiMsg : (e instanceof Error ? e.message : String(e)).replace(/^\d{3}\s+/, "");
   const msg = raw.replace(/sk-ant-[\w-]+/g, "[key]").replace(/\s+/g, " ").slice(0, 160);
   const summary = status ? `${status}: ${msg}` : msg;
   try {

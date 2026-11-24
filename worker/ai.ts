@@ -6,7 +6,7 @@ import { CATEGORIES, DATE_FACTS } from "./core/categories";
 import { toParseOutput, WireParseSchema } from "./core/wire";
 import { AdviceSchema, AnswerSchema, TipWordingSchema, type AdviceOut, type AnswerOut, type ParseOutput } from "./core/schema";
 import { civilOf, civilToIso, localParts } from "./core/time";
-import { logUsage } from "./lib/usage";
+import { logModelError, logUsage } from "./lib/usage";
 
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
@@ -70,7 +70,8 @@ export async function parseNote(env: Env, text: string, ctx: ParseContext): Prom
   const model = env.PARSE_MODEL;
   const res = await client(env).messages.parse({
     model,
-    max_tokens: 2000,
+    max_tokens: 4000,
+    thinking: { type: "disabled" },
     system: PARSE_SYSTEM(),
     output_config: { effort: "low", format: zodOutputFormat(WireParseSchema) },
     messages: [{ role: "user", content: `${context}\n\n<note>\n${text}\n</note>` }],
@@ -107,7 +108,8 @@ export async function answerQuestion(env: Env, question: string, items: AnswerIt
   const model = env.PARSE_MODEL;
   const res = await client(env).messages.parse({
     model,
-    max_tokens: 1000,
+    max_tokens: 2000,
+    thinking: { type: "disabled" },
     system: ANSWER_SYSTEM,
     output_config: { effort: "low", format: zodOutputFormat(AnswerSchema) },
     messages: [
@@ -146,7 +148,9 @@ export async function giveAdvice(env: Env, question: string, ctx: AdviceContext)
   const call = async (model: string) => {
     const res = await client(env).messages.parse({
       model,
-      max_tokens: 2000,
+      // Sonnet 5.5 cannot turn thinking off; leave room for it so the JSON is never cut short.
+      max_tokens: 8000,
+      ...(model === env.PARSE_MODEL ? { thinking: { type: "disabled" as const } } : {}),
       system: ADVICE_SYSTEM,
       output_config: { effort: "low", format: zodOutputFormat(AdviceSchema) },
       messages: [{ role: "user", content }],
@@ -156,7 +160,13 @@ export async function giveAdvice(env: Env, question: string, ctx: AdviceContext)
   };
   const primary = env.ADVICE_MODEL || env.PARSE_MODEL;
   // Client-side fallback: if the advice model declines (safety classifiers can be broad), try the parse model once.
-  let out = await call(primary);
+  let out: Awaited<ReturnType<typeof call>> = null;
+  try {
+    out = await call(primary);
+  } catch (e) {
+    if (primary === env.PARSE_MODEL) throw e;
+    await logModelError(env.DB, "advice", e);
+  }
   if (!out && primary !== env.PARSE_MODEL) out = await call(env.PARSE_MODEL);
   if (!out) return null;
   const known = new Set([...ctx.facts.map((f) => f.id), ...ctx.related.map((i) => i.id), ...ctx.focus.map((i) => i.id)]);
@@ -191,7 +201,8 @@ export async function wordTips(env: Env, drafts: { id: string; draft: string }[]
   const model = env.PARSE_MODEL;
   const res = await client(env).messages.parse({
     model,
-    max_tokens: 1200,
+    max_tokens: 2000,
+    thinking: { type: "disabled" },
     system: WORDING_SYSTEM,
     output_config: { effort: "low", format: zodOutputFormat(TipWordingSchema) },
     messages: [{ role: "user", content: `<drafts>\n${JSON.stringify(drafts)}\n</drafts>` }],

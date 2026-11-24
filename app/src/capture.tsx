@@ -149,6 +149,11 @@ export function CaptureBox({ people, onCaptured }: { people: Person[]; onCapture
           {result?.type === "capture" && (
             <ConfirmCard key={result.item.id} item={result.item} question={result.question} people={people} onDone={() => setResult(null)} onChanged={onCaptured} />
           )}
+          {result?.type === "answer" && result.ai_error && (
+            <p className="ai-error small" role="alert">
+              The AI call failed ({result.ai_error}). Check Settings → AI usage.
+            </p>
+          )}
           {result?.type === "answer" && (
             <Answer answer={result.answer} disclaimer={result.disclaimer ?? null} because={result.because ?? []} items={result.items} onClose={() => setResult(null)} />
           )}
