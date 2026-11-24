@@ -6,7 +6,7 @@ import { errText } from "./auth";
 import { PersonPick, WhenEdit } from "./capture";
 import { ago, todayBounds, when } from "./fmt";
 import { Icon } from "./icons";
-import { Back, Empty, SectionH, Sheet, haptic } from "./ui";
+import { Back, Empty, SectionH, Sheet, haptic, peopleChanged } from "./ui";
 
 const LABELS: Record<Bucket, string> = { overdue: "Overdue", today: "Today", upcoming: "Coming up", anytime: "Anytime", snoozed: "Snoozed" };
 
@@ -154,6 +154,7 @@ export function ItemDetail({ id, people, onBack }: { id: string; people: Person[
       const r = await api<{ item: Item }>(`/api/items/${id}`, { method: "PATCH", body });
       setItem(r.item);
       setEdit("");
+      if ("for_person_name" in body || "requested_by_name" in body) peopleChanged();
     } catch (e) {
       setErr(errText(e));
     }
@@ -289,12 +290,12 @@ export function ItemDetail({ id, people, onBack }: { id: string; people: Person[
       )}
       {edit === "for" && (
         <Sheet title={c?.person ?? "For"} onClose={() => setEdit("")}>
-          <PersonPick people={people} value={item.for_person?.id ?? null} onSave={(v) => patch({ for_person_id: v })} />
+          <PersonPick people={people} value={item.for_person?.name ?? null} onSave={(v) => patch({ for_person_name: v ?? "" })} />
         </Sheet>
       )}
       {edit === "by" && (
         <Sheet title="Asked by" onClose={() => setEdit("")}>
-          <PersonPick people={people} value={item.requested_by?.id ?? null} onSave={(v) => patch({ requested_by_person_id: v })} />
+          <PersonPick people={people} value={item.requested_by?.name ?? null} onSave={(v) => patch({ requested_by_name: v ?? "" })} />
         </Sheet>
       )}
       {edit === "attrs" && c && (

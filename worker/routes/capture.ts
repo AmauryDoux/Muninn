@@ -26,6 +26,23 @@ export interface GapQuestion {
   question: string;
 }
 
+/**
+ * A person typed into a form ("Emma", "wife", "Aunt Lisa"): the existing match, or a new person.
+ * Returns null for "me" or an empty name. Typed names keep their casing; relation words become the relation.
+ */
+export async function personFromTypedName(repo: Repo, typed: string): Promise<Person | null> {
+  const raw = typed.trim().slice(0, 80);
+  if (!raw) return null;
+  const m = { mention: raw, relation: null };
+  if (isSelfMention(m)) return null;
+  const people = await repo.people();
+  const found = matchPerson(people, m);
+  if (found) return found;
+  const relation = cleanRelation(raw);
+  const name = relation !== "other" ? raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase() : raw;
+  return repo.createPerson(name, relation, relation !== "other" ? [normalizeMention(raw)] : []);
+}
+
 async function resolveMention(
   repo: Repo,
   people: Person[],

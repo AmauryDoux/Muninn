@@ -3,7 +3,7 @@ import { api, capture, type Because, type CaptureResult, type GapQuestion, type 
 import { errText } from "./auth";
 import { localDate, when } from "./fmt";
 import { Icon } from "./icons";
-import { Disclaimer, haptic } from "./ui";
+import { Disclaimer, PersonInput, haptic, peopleChanged } from "./ui";
 
 type SR = {
   lang: string;
@@ -274,6 +274,7 @@ export function ConfirmCard({
       const r = await api<{ item: Item }>(`/api/items/${item.id}`, { method: "PATCH", body });
       setItem(r.item);
       setEditing(null);
+      if ("for_person_name" in body || "requested_by_name" in body) peopleChanged();
       onChanged();
     } catch (e) {
       setErr(errText(e));
@@ -327,8 +328,8 @@ export function ConfirmCard({
 
       {editing === "title" && <TextEdit value={item.title} onSave={(v) => patch({ title: v })} />}
       {editing === "place" && <TextEdit value={item.place_hint ?? ""} onSave={(v) => patch({ place_hint: v || null })} />}
-      {editing === "for" && <PersonPick people={people} value={item.for_person?.id ?? null} onSave={(id) => patch({ for_person_id: id })} />}
-      {editing === "by" && <PersonPick people={people} value={item.requested_by?.id ?? null} onSave={(id) => patch({ requested_by_person_id: id })} />}
+      {editing === "for" && <PersonPick people={people} value={item.for_person?.name ?? null} onSave={(name) => patch({ for_person_name: name ?? "" })} />}
+      {editing === "by" && <PersonPick people={people} value={item.requested_by?.name ?? null} onSave={(name) => patch({ requested_by_name: name ?? "" })} />}
       {editing === "when" && <WhenEdit item={item} onSave={(b) => patch(b)} />}
 
       {question && (
@@ -371,20 +372,26 @@ function TextEdit({ value, onSave }: { value: string; onSave: (v: string) => voi
   );
 }
 
-export function PersonPick({ people, value, onSave }: { people: Person[]; value: string | null; onSave: (id: string | null) => void }) {
+export function PersonPick({ people, value, onSave }: { people: Person[]; value: string | null; onSave: (name: string | null) => void }) {
+  const [v, setV] = useState(value ?? "");
   return (
-    <div className="chips edit">
-      <button type="button" className={value === null ? "chip on" : "chip"} onClick={() => onSave(null)}>
-        nobody
-      </button>
-      {people
-        .filter((p) => p.relation !== "self")
-        .map((p) => (
-          <button type="button" key={p.id} className={value === p.id ? "chip on" : "chip"} onClick={() => onSave(p.id)}>
-            {p.name}
+    <form
+      className="edit"
+      onSubmit={(e) => {
+        e.preventDefault();
+        onSave(v.trim() || null);
+      }}
+    >
+      <PersonInput people={people} value={v} onChange={setV} autoFocus />
+      <div className="row">
+        <button className="btn primary">Save</button>
+        {value && (
+          <button type="button" className="btn ghost" onClick={() => onSave(null)}>
+            Clear
           </button>
-        ))}
-    </div>
+        )}
+      </div>
+    </form>
   );
 }
 

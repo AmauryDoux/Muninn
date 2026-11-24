@@ -1,3 +1,4 @@
+import { personFromTypedName } from "./capture";
 // The Life screens: categories, important dates, balances, study, things, tips and the ideas digest.
 import { actOnTip, currentTips } from "../advice";
 import { CATEGORIES, attrMoney, category, coerceAttrs, dateFactKind, GROUPS } from "../core/categories";
@@ -103,6 +104,8 @@ interface CreateBody {
   title?: unknown;
   details?: unknown;
   for_person_id?: unknown;
+  /** Typed name: matched to an existing person or created. Used when no id is given. */
+  for_person_name?: unknown;
   attrs?: unknown;
   date?: unknown;
   end_date?: unknown;
@@ -124,6 +127,8 @@ export async function createLifeItem(repo: Repo, req: Request, tz: string): Prom
   if (b.for_person_id != null) {
     personId = str(b.for_person_id, "for_person_id", 40);
     if (!(await repo.people()).some((p) => p.id === personId)) throw new HttpError(400, "bad_person");
+  } else if (b.for_person_name != null && b.for_person_name !== "") {
+    personId = (await personFromTypedName(repo, str(b.for_person_name, "for_person_name", 80)))?.id ?? null;
   }
   if (b.attrs != null && (typeof b.attrs !== "object" || Array.isArray(b.attrs))) throw new HttpError(400, "bad_attrs");
   const recurrence = b.recurrence == null || b.recurrence === "" ? null : str(b.recurrence, "recurrence", 200);

@@ -6,7 +6,7 @@ import { api, type Item, type Person } from "./api";
 import { errText } from "./auth";
 import { Icon } from "./icons";
 import { AttrsForm, ItemList } from "./items";
-import { Back, Empty, SectionH, Sheet } from "./ui";
+import { Back, Empty, PersonInput, SectionH, Sheet, peopleChanged } from "./ui";
 
 interface Summary {
   groups: { id: string; label: string; icon: string; categories: { subtype: string; open: number; total: number }[] }[];
@@ -240,8 +240,9 @@ function AddForm({ subtype, people, onDone }: { subtype: string; people: Person[
   async function save(attrs: Record<string, unknown>) {
     try {
       const r = await api<{ warnings: string[] }>("/api/life/items", {
-        body: { subtype, title, for_person_id: person || null, thing_name: thing || null, attrs, date: date || null, time: time || null, recurrence: repeat || null },
+        body: { subtype, title, for_person_name: person.trim() || null, thing_name: thing || null, attrs, date: date || null, time: time || null, recurrence: repeat || null },
       });
+      if (person.trim()) peopleChanged();
       onDone(r.warnings);
     } catch (e) {
       setErr(errText(e));
@@ -270,16 +271,7 @@ function AddForm({ subtype, people, onDone }: { subtype: string; people: Person[
       {cat.person && (
         <label className="field">
           {cat.person}
-          <select value={person} onChange={(e) => setPerson(e.target.value)}>
-            <option value="">{subtype === "medication" || subtype === "appointment" || subtype === "vaccination" ? "Me" : "—"}</option>
-            {people
-              .filter((p) => p.relation !== "self")
-              .map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-          </select>
+          <PersonInput people={people} value={person} onChange={setPerson} placeholder={subtype === "medication" || subtype === "appointment" || subtype === "vaccination" ? "Me, or type a name" : "Type a name"} />
         </label>
       )}
       {dated && (

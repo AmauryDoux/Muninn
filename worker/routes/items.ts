@@ -1,3 +1,4 @@
+import { personFromTypedName } from "./capture";
 import { rollRecurring } from "../core/recurring";
 import { snoozeUntil, type ReminderSettings } from "../core/reminders";
 import { syncItemTriggers } from "../engine";
@@ -34,6 +35,9 @@ interface Patch {
   kind?: unknown;
   for_person_id?: unknown;
   requested_by_person_id?: unknown;
+  /** Typed names, matched or created; an empty string clears. */
+  for_person_name?: unknown;
+  requested_by_name?: unknown;
   place_hint?: unknown;
   start_date?: unknown; // YYYY-MM-DD or null to clear
   end_date?: unknown;
@@ -70,6 +74,11 @@ export async function patchItem(repo: Repo, req: Request, id: string, tz: string
   if (p.kind !== undefined) {
     if (typeof p.kind !== "string" || !KINDS.has(p.kind)) throw new HttpError(400, "bad_kind");
     set("kind", p.kind);
+  }
+  for (const [nameKey, col] of [["for_person_name", "for_person_id"], ["requested_by_name", "requested_by_person_id"]] as const) {
+    const v = p[nameKey];
+    if (v === undefined || p[col] !== undefined) continue;
+    p[col] = v === null || v === "" ? null : ((await personFromTypedName(repo, str(v, nameKey, 80)))?.id ?? null);
   }
   const people = new Set((await repo.people()).map((x) => x.id));
   for (const col of ["for_person_id", "requested_by_person_id"] as const) {
