@@ -143,6 +143,8 @@ export async function actOnItem(repo: Repo, req: Request, id: string, rs: Remind
   const now = new Date();
   const iso = now.toISOString();
   const nudge = typeof body.nudge_type === "string" ? body.nudge_type.slice(0, 40) : null;
+  // What an undo restores: only status and scheduling columns, no content.
+  const prev: Record<string, string | null> = Object.fromEntries(UNDO_COLUMNS.map((c) => [c, row[c] as string | null]));
   switch (body.action) {
     case "done": {
       // A recurring item (pills, filters, seasonal chores) moves to its next occurrence instead of closing.
@@ -153,12 +155,12 @@ export async function actOnItem(repo: Repo, req: Request, id: string, rs: Remind
           .bind(next.window_start, next.window_end, next.due_at, iso, id)
           .run();
       } else await repo.db.prepare("UPDATE items SET status = 'done', updated_at = ? WHERE id = ?").bind(iso, id).run();
-      await repo.event("done", { itemId: id, nudgeType: nudge, payload: next ? { recurring: true } : undefined });
+      await repo.event("done", { itemId: id, nudgeType: nudge, payload: { recurring: !!next, prev } });
       break;
     }
     case "dismiss":
       await repo.db.prepare("UPDATE items SET status = 'dropped', updated_at = ? WHERE id = ?").bind(iso, id).run();
-      await repo.event("dismiss", { itemId: id, nudgeType: nudge });
+      await repo.event("dismiss", { itemId: id, nudgeType: nudge, payload: { prev } });
       break;
     case "reopen":
       await repo.db.prepare("UPDATE items SET status = 'open', updated_at = ? WHERE id = ?").bind(iso, id).run();
@@ -173,7 +175,24 @@ export async function actOnItem(repo: Repo, req: Request, id: string, rs: Remind
         .prepare("UPDATE items SET snoozed_until = ?, reminded_start_at = NULL, updated_at = ? WHERE id = ?")
         .bind(until.toISOString(), iso, id)
         .run();
-      await repo.event("snooze", { itemId: id, nudgeType: nudge, payload: { preset: body.preset } });
+      await repo.event("snooze", { itemId: id, nudgeType: nudge, payload: { preset: body.preset, prev } });
+      break;
+    }
+    case "undo": {
+      // Puts back the item as it was before the last done, dismiss or snooze, if that was in the last 10 minutes.
+      const last = await repo.db
+        .prepare("SELECT id, type, payload_json FROM events WHERE item_id = ? AND type IN ('done', 'dismiss', 'snooze') AND at >= ? ORDER BY at DESC LIMIT 1")
+        .bind(id, new Date(now.getTime() - UNDO_WINDOW_MS).toISOString())
+        .first<{ id: string; type: string; payload_json: string | null }>();
+      const before = last?.payload_json ? (JSON.parse(last.payload_json) as { prev?: Record<string, string | null> }).prev : undefined;
+      if (!last || !before) throw new HttpError(409, "nothing_to_undo", "Too late to undo.");
+      await repo.db
+        .prepare(`UPDATE items SET ${UNDO_COLUMNS.map((c) => `${c} = ?`).join(", ")}, updated_at = ? WHERE id = ?`)
+        .bind(...UNDO_COLUMNS.map((c) => before[c] ?? null), iso, id)
+        .run();
+      // The undone event no longer counts (tips learn from done/dismiss/snooze).
+      await repo.db.prepare("UPDATE events SET type = ? WHERE id = ?").bind(`${last.type}_undone`, last.id).run();
+      if (row.subtype) await syncItemTriggers(repo, (await repo.getItemRow(id))!, rs.tz);
       break;
     }
     case "act":
@@ -185,6 +204,9 @@ export async function actOnItem(repo: Repo, req: Request, id: string, rs: Remind
   }
   return getItem(repo, id);
 }
+
+const UNDO_WINDOW_MS = 10 * 60_000;
+const UNDO_COLUMNS = ["status", "window_start", "window_end", "due_at", "snoozed_until", "reminded_start_at", "reminded_end_at"] as const;
 
 /** Hard delete, for things that should not be kept at all. Needs a fresh check. */
 export async function deleteItem(repo: Repo, id: string): Promise<Response> {

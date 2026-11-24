@@ -409,3 +409,14 @@ ol.steps {
   margin-top: 10px;
   line-height: 1.5;
 }
+
+/* Undo toast: above the composer and tab bar, in thumb reach. */
+.toast {
+  position: fixed; z-index: 40; left: 16px; right: 16px; max-width: 528px; margin: 0 auto;
+  bottom: calc(var(--safe-bottom) + var(--tabbar-h) + 84px);
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 10px 10px 10px 16px; border-radius: 18px;
+  background: var(--glass); border: 1px solid var(--stroke-2); box-shadow: var(--shadow);
+  -webkit-backdrop-filter: blur(24px) saturate(180%); backdrop-filter: blur(24px) saturate(180%);
+  font-weight: 600;
+}

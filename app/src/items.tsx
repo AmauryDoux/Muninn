@@ -7,6 +7,7 @@ import { PersonPick, WhenEdit } from "./capture";
 import { ago, todayBounds, when } from "./fmt";
 import { Icon } from "./icons";
 import { Back, Empty, SectionH, Sheet, haptic, peopleChanged } from "./ui";
+import { offerUndo } from "./undo";
 
 const LABELS: Record<Bucket, string> = { overdue: "Overdue", today: "Today", upcoming: "Coming up", anytime: "Anytime", snoozed: "Snoozed" };
 
@@ -27,6 +28,7 @@ export function ItemRow({ item, onChange }: { item: Item; onChange: () => void }
     setMenu(false);
     try {
       await api(`/api/items/${item.id}/act`, { body: { action, preset } });
+      offerUndo(item.id, action, onChange);
     } finally {
       onChange();
     }
@@ -163,6 +165,7 @@ export function ItemDetail({ id, people, onBack }: { id: string; people: Person[
     haptic();
     const r = await api<{ item: Item }>(`/api/items/${id}/act`, { body: { action } });
     setItem(r.item);
+    offerUndo(id, action, () => api<{ item: Item }>(`/api/items/${id}`).then((x) => setItem(x.item)));
   }
   async function remove() {
     if (!confirm("Delete this item and its original note for good?")) return;

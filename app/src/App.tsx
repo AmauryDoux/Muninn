@@ -10,6 +10,7 @@ import { Know } from "./know";
 import { CategoryScreen, Digest, LifeHome, ThingDetail, ThingsScreen } from "./life";
 import { Settings } from "./settings";
 import { Tips } from "./tips";
+import { UndoToast } from "./undo";
 
 interface Status {
   setup_done: boolean;
@@ -228,6 +229,7 @@ function Main({ hasPasskey, onSignedOut, onPasskeyAdded }: { hasPasskey: boolean
           }}
         />
       )}
+      <UndoToast />
       <nav className="tabbar" aria-label="Sections">
         {TABS.map(([t, label, icon]) => (
           <button
