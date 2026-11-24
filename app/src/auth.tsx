@@ -66,33 +66,34 @@ export function Setup({ onDone }: { onDone: () => void }) {
   }
 
   return (
-    <form className="card auth" onSubmit={submit} method="post" action="/login">
+    <form className="auth" onSubmit={submit} method="post" action="/login">
+      <img className="logo-xl" src="/icons/raven.svg" alt="" width={96} height={96} />
       <h1>Set up Muninn</h1>
       <p className="muted">Enter the setup code you stored with <code>wrangler secret put SETUP_CODE</code>, then pick a username and password. You will add a passkey (Face ID) next.</p>
-      <label>
+      <label className="field">
         Setup code
         <input name="setup-code" value={code} onChange={(e) => setCode(e.target.value)} autoComplete="one-time-code" autoCapitalize="characters" required />
       </label>
-      <label>
+      <label className="field">
         Your first name
         <input name="name" value={name} onChange={(e) => setName(e.target.value)} autoComplete="given-name" />
       </label>
-      <label>
+      <label className="field">
         Username
         <input name="username" value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" autoCapitalize="none" autoCorrect="off" spellCheck={false} required />
       </label>
-      <label>
+      <label className="field">
         Password
         <input name="password" type="password" value={pass} onChange={(e) => setPass(e.target.value)} autoComplete="new-password" minLength={MIN_PASSWORD} required />
       </label>
       <PasswordHint username={username} password={pass} />
-      <label>
+      <label className="field">
         Confirm password
         <input name="password-confirm" type="password" value={pass2} onChange={(e) => setPass2(e.target.value)} autoComplete="new-password" required />
       </label>
       <p className="muted small">Time zone: {tz}</p>
       {err && <p className="error">{err}</p>}
-      <button className="primary" disabled={busy}>
+      <button className="btn primary" disabled={busy}>
         {busy ? "Setting up…" : "Create account"}
       </button>
     </form>
@@ -133,27 +134,29 @@ export function Login({ hasPasskey, needsUsername, onDone }: { hasPasskey: boole
   }
 
   return (
-    <div className="card auth">
+    <div className="auth">
+      <img className="logo-xl" src="/icons/raven.svg" alt="" width={96} height={96} />
       <h1>Muninn</h1>
+      <p className="muted">Your private memory.</p>
       {hasPasskey && (
         <>
-          <button className="primary" onClick={withPasskey} disabled={busy}>
+          <button className="btn primary" onClick={withPasskey} disabled={busy}>
             Sign in with passkey
           </button>
-          <p className="muted small center-text">or</p>
+          <p className="muted small center">or</p>
         </>
       )}
       <form onSubmit={withPassword} method="post" action="/login">
         {needsUsername && <p className="notice small">Usernames are new. Choose one now and sign in with your current passphrase as the password; you can change the password in Settings.</p>}
-        <label>
+        <label className="field">
           Username
           <input name="username" value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" autoCapitalize="none" autoCorrect="off" spellCheck={false} required />
         </label>
-        <label>
+        <label className="field">
           Password
           <input name="password" type="password" value={pass} onChange={(e) => setPass(e.target.value)} autoComplete="current-password" required />
         </label>
-        <button className={hasPasskey ? "" : "primary"} disabled={busy}>
+        <button className={hasPasskey ? "btn" : "btn primary"} disabled={busy}>
           Sign in
         </button>
       </form>
@@ -195,20 +198,20 @@ export function Reauth({ hasPasskey, onClose }: { hasPasskey: boolean; onClose: 
         <h2>Confirm it's you</h2>
         <p className="muted">This screen holds sensitive data.</p>
         {hasPasskey && (
-          <button className="primary" onClick={viaPasskey}>
+          <button className="btn primary" onClick={viaPasskey}>
             Use passkey
           </button>
         )}
         <form onSubmit={viaPass}>
           <input type="text" name="username" value={username} autoComplete="username" readOnly hidden />
-          <label>
+          <label className="field">
             Password
             <input name="password" type="password" value={pass} onChange={(e) => setPass(e.target.value)} autoComplete="current-password" />
           </label>
-          <button>Confirm</button>
+          <button className="btn">Confirm</button>
         </form>
         {err && <p className="error">{err}</p>}
-        <button className="link" onClick={() => onClose(false)}>
+        <button className="btn ghost small" onClick={() => onClose(false)}>
           Cancel
         </button>
       </div>

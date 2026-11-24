@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "./api";
 import { PasswordHint, errText, registerPasskey } from "./auth";
 import { ago, setTz } from "./fmt";
+import { Icon } from "./icons";
 
 interface SettingsResp {
   settings: Record<string, string | null>;
@@ -97,7 +98,7 @@ export function Settings({ onSignedOut }: { onSignedOut: () => void }) {
 
   if (!s) return <p className="muted center">{msg || "Loading…"}</p>;
   const field = (k: string, label: string, type = "text") => (
-    <label>
+    <label className="field">
       {label}
       <input type={type} value={form[k] ?? ""} onChange={(e) => setForm({ ...form, [k]: e.target.value })} />
     </label>
@@ -110,14 +111,14 @@ export function Settings({ onSignedOut }: { onSignedOut: () => void }) {
 
       <section className="card">
         <h3>Reminders</h3>
-        <button className="primary" onClick={enablePush}>
+        <button className="btn primary" onClick={enablePush}>
           Turn on reminders on this device
         </button>
         <ul className="plain">
           {devices.map((d) => (
             <li key={d.id}>
               {d.device_label ?? "Device"} <span className="muted small">added {ago(d.created_at)}{d.last_ok_at ? `, last push ${ago(d.last_ok_at)}` : ""}</span>{" "}
-              <button className="link danger" onClick={() => api(`/api/devices/${d.id}`, { method: "DELETE" }).then(load)}>
+              <button className="btn ghost small danger" onClick={() => api(`/api/devices/${d.id}`, { method: "DELETE" }).then(load)}>
                 Remove
               </button>
             </li>
@@ -140,8 +141,10 @@ export function Settings({ onSignedOut }: { onSignedOut: () => void }) {
           {field("start_hour", "All-day reminders at", "time")}
           {field("evening_hour", "Evening reminders at", "time")}
         </div>
-        <button className="primary">Save</button>
+        <button className="btn primary">Save</button>
       </form>
+
+      <LifeSettings settings={s.settings} onMsg={setMsg} />
 
       <section className="card">
         <h3>Sign-in</h3>
@@ -149,17 +152,17 @@ export function Settings({ onSignedOut }: { onSignedOut: () => void }) {
           {passkeys.map((p) => (
             <li key={p.id}>
               {p.label} <span className="muted small">added {ago(p.created_at)}{p.last_used_at ? `, used ${ago(p.last_used_at)}` : ""}</span>{" "}
-              <button className="link danger" onClick={() => api(`/api/auth/passkeys/${encodeURIComponent(p.id)}`, { method: "DELETE" }).then(load).catch((e) => setMsg(errText(e)))}>
+              <button className="btn ghost small danger" onClick={() => api(`/api/auth/passkeys/${encodeURIComponent(p.id)}`, { method: "DELETE" }).then(load).catch((e) => setMsg(errText(e)))}>
                 Remove
               </button>
             </li>
           ))}
         </ul>
-        <button onClick={addPasskey}>Add a passkey</button>
+        <button className="btn" onClick={addPasskey}>Add a passkey</button>
         <ChangePassword onMsg={setMsg} />
         <div className="row">
-          <button onClick={() => api("/api/auth/logout", { method: "POST", body: {} }).then(onSignedOut)}>Sign out</button>
-          <button className="danger" onClick={() => confirm("Sign out every device?") && api("/api/auth/logout-all", { method: "POST", body: {} }).then(onSignedOut)}>
+          <button className="btn" onClick={() => api("/api/auth/logout", { method: "POST", body: {} }).then(onSignedOut)}>Sign out</button>
+          <button className="btn danger" onClick={() => confirm("Sign out every device?") && api("/api/auth/logout-all", { method: "POST", body: {} }).then(onSignedOut)}>
             Sign out all devices
           </button>
         </div>
@@ -170,9 +173,86 @@ export function Settings({ onSignedOut }: { onSignedOut: () => void }) {
       <section className="card">
         <h3>Your data</h3>
         <p className="muted small">Everything Muninn holds, as JSON. Search uses {s.vectorize ? "Vectorize" : "vectors stored in D1"}.</p>
-        <button onClick={download}>Export JSON</button>
+        <button className="btn" onClick={download}>Export JSON</button>
       </section>
     </div>
+  );
+}
+
+function Toggle({ on, label, hint, onToggle }: { on: boolean; label: string; hint: string; onToggle: () => void }) {
+  return (
+    <div className="toggle">
+      <div>
+        <div>{label}</div>
+        <div className="muted tiny">{hint}</div>
+      </div>
+      <button type="button" role="switch" aria-checked={on} aria-label={label} className={on ? "switch on" : "switch"} onClick={onToggle} />
+    </div>
+  );
+}
+
+function LifeSettings({ settings, onMsg }: { settings: Record<string, string | null>; onMsg: (m: string) => void }) {
+  const [v, setV] = useState({
+    currency: settings.currency ?? "USD",
+    home_lat: settings.home_lat ?? "",
+    home_lon: settings.home_lon ?? "",
+    tips_enabled: settings.tips_enabled ?? "1",
+    tips_ai: settings.tips_ai ?? "1",
+  });
+  async function save(patch: Partial<typeof v>) {
+    const next = { ...v, ...patch };
+    setV(next);
+    try {
+      const body = Object.fromEntries(Object.entries(patch).filter(([, x]) => x !== ""));
+      await api("/api/settings", { method: "PUT", body });
+      onMsg("Saved.");
+    } catch (e) {
+      onMsg(errText(e));
+    }
+  }
+  return (
+    <section className="card">
+      <h3>Suggestions and life</h3>
+      <Toggle on={v.tips_enabled === "1"} label="Proactive suggestions" hint="Built by rules from what you told me; each shows why." onToggle={() => save({ tips_enabled: v.tips_enabled === "1" ? "0" : "1" })} />
+      <Toggle on={v.tips_ai === "1"} label="Natural wording" hint="One small AI call a day rewords new tips. Facts and numbers are checked by code." onToggle={() => save({ tips_ai: v.tips_ai === "1" ? "0" : "1" })} />
+      <hr />
+      <form
+        className="row"
+        onSubmit={(e) => {
+          e.preventDefault();
+          save({ currency: v.currency.toUpperCase() });
+        }}
+      >
+        <label className="field">
+          Default currency
+          <input value={v.currency} maxLength={3} onChange={(e) => setV({ ...v, currency: e.target.value })} autoCapitalize="characters" />
+        </label>
+        <button className="btn">Save</button>
+      </form>
+      <hr />
+      <p className="small">Weather cues for seasonal chores (winter tires, frost, heat).</p>
+      <p className="muted tiny">Optional. Stored rounded to about 1 km. The forecast comes from Open-Meteo (free, no account), which sees that rounded location once a day.</p>
+      <div className="row">
+        <button
+          className="btn small"
+          type="button"
+          onClick={() =>
+            navigator.geolocation.getCurrentPosition(
+              (p) => save({ home_lat: p.coords.latitude.toFixed(2), home_lon: p.coords.longitude.toFixed(2) }),
+              () => onMsg("Location was not shared. You can type it instead."),
+              { maximumAge: 3600_000, timeout: 10_000 },
+            )
+          }
+        >
+          <Icon name="location" size={18} /> Use my location
+        </button>
+        {v.home_lat && (
+          <span className="muted small">
+            {v.home_lat}, {v.home_lon}
+          </span>
+        )}
+      </div>
+    </section>
   );
 }
 
@@ -185,7 +265,7 @@ function ChangePassword({ onMsg }: { onMsg: (m: string) => void }) {
   }, [open]);
   if (!open)
     return (
-      <button className="link" onClick={() => setOpen(true)}>
+      <button className="btn ghost small" onClick={() => setOpen(true)}>
         Change username or password
       </button>
     );
@@ -202,16 +282,16 @@ function ChangePassword({ onMsg }: { onMsg: (m: string) => void }) {
         }
       }}
     >
-      <label>
+      <label className="field">
         Username
         <input name="username" value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" autoCapitalize="none" autoCorrect="off" spellCheck={false} />
       </label>
-      <label>
+      <label className="field">
         New password
         <input name="password" type="password" value={p} onChange={(e) => setP(e.target.value)} autoComplete="new-password" />
       </label>
       <PasswordHint username={username} password={p} />
-      <button className="primary">Save</button>
+      <button className="btn primary">Save</button>
     </form>
   );
 }
@@ -229,6 +309,7 @@ const JOB_LABELS: Record<string, string> = {
   answer: "Answering questions",
   advice: "Advice",
   brief: "Morning brief",
+  tips: "Suggestion wording",
   embed: "Search index (free)",
   transcribe: "Voice (free tier)",
 };
@@ -243,7 +324,7 @@ function Usage() {
   return (
     <section className="card">
       <h3>AI usage</h3>
-      <label>
+      <label className="field">
         Month
         <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} />
       </label>

@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { api, capture, type CaptureResult, type GapQuestion, type Item, type Person } from "./api";
+import { api, capture, type Because, type CaptureResult, type GapQuestion, type Item, type Person } from "./api";
 import { errText } from "./auth";
 import { localDate, when } from "./fmt";
+import { Icon } from "./icons";
+import { Disclaimer, haptic } from "./ui";
 
 type SR = {
   lang: string;
@@ -18,6 +20,11 @@ function speechRecognition(): (new () => SR) | null {
   return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null;
 }
 
+function grow(el: HTMLTextAreaElement) {
+  el.style.height = "auto";
+  el.style.height = `${Math.min(140, el.scrollHeight)}px`;
+}
+
 /** One box for both telling and asking. */
 export function CaptureBox({ people, onCaptured }: { people: Person[]; onCaptured: () => void }) {
   const [text, setText] = useState("");
@@ -31,6 +38,7 @@ export function CaptureBox({ people, onCaptured }: { people: Person[]; onCapture
   async function submit(t = text, src = source) {
     const v = t.trim();
     if (!v) return;
+    haptic();
     setBusy(true);
     setErr("");
     try {
@@ -117,19 +125,46 @@ export function CaptureBox({ people, onCaptured }: { people: Person[]; onCapture
   }
 
   return (
-    <section>
+    <>
+      {(result || err) && (
+        <div className="composer-panel">
+          {err && (
+            <div className="card">
+              <p className="error">{err}</p>
+            </div>
+          )}
+          {result?.type === "queued" && (
+            <div className="card">
+              <p className="muted">Offline. Saved on this phone; it sends when you're back online.</p>
+              <button className="btn ghost" onClick={() => setResult(null)}>
+                OK
+              </button>
+            </div>
+          )}
+          {result?.type === "capture" && (
+            <ConfirmCard key={result.item.id} item={result.item} question={result.question} people={people} onDone={() => setResult(null)} onChanged={onCaptured} />
+          )}
+          {result?.type === "answer" && (
+            <Answer answer={result.answer} disclaimer={result.disclaimer ?? null} because={result.because ?? []} items={result.items} onClose={() => setResult(null)} />
+          )}
+        </div>
+      )}
       <form
-        className="capture"
+        className="composer"
         onSubmit={(e) => {
           e.preventDefault();
           submit();
         }}
       >
+        <button type="button" className={listening ? "roundbtn rec" : "roundbtn"} onClick={mic} aria-label={listening ? "Stop" : "Speak"}>
+          <Icon name={listening ? "x" : "mic"} />
+        </button>
         <textarea
           value={text}
           onChange={(e) => {
             setText(e.target.value);
             setSource("text");
+            grow(e.target);
           }}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) {
@@ -137,47 +172,61 @@ export function CaptureBox({ people, onCaptured }: { people: Person[]; onCapture
               submit();
             }
           }}
-          placeholder="Tell me something, or ask…"
-          rows={2}
+          placeholder={listening ? "Listening…" : "Tell me, or ask…"}
+          rows={1}
           maxLength={2000}
+          enterKeyHint="send"
           aria-label="Tell or ask"
         />
-        <div className="row">
-          <button type="button" className={listening ? "mic on" : "mic"} onClick={mic} aria-label={listening ? "Stop" : "Speak"}>
-            {listening ? "■" : "🎙"}
-          </button>
-          <button className="primary" disabled={busy || !text.trim()}>
-            {busy ? "…" : "Send"}
-          </button>
-        </div>
+        <button className="roundbtn send" disabled={busy || !text.trim()} aria-label="Send">
+          {busy ? <span className="spinner" /> : <Icon name="send" />}
+        </button>
       </form>
-      {err && <p className="error">{err}</p>}
-      {result?.type === "queued" && <p className="muted">Offline. Saved on this phone and will send when you're back online.</p>}
-      {result?.type === "capture" && (
-        <ConfirmCard key={result.item.id} item={result.item} question={result.question} people={people} onDone={() => setResult(null)} onChanged={onCaptured} />
-      )}
-      {result?.type === "answer" && <Answer answer={result.answer} disclaimer={result.disclaimer ?? null} items={result.items} onClose={() => setResult(null)} />}
-    </section>
+    </>
   );
 }
 
-function Answer({ answer, disclaimer, items, onClose }: { answer: string; disclaimer: string | null; items: Item[]; onClose: () => void }) {
+function Answer({ answer, disclaimer, because, items, onClose }: { answer: string; disclaimer: string | null; because: Because[]; items: Item[]; onClose: () => void }) {
+  const [why, setWhy] = useState(false);
   return (
     <div className="card answer">
-      <p className="prewrap">{answer}</p>
-      {disclaimer && <p className="muted small disclaimer">{disclaimer}</p>}
+      <button className="iconbtn panel-close" aria-label="Close" onClick={onClose}>
+        <Icon name="x" size={18} />
+      </button>
+      <p className="prewrap brief">{answer}</p>
+      {disclaimer && <Disclaimer text={disclaimer} />}
+      {because.length > 0 && (
+        <>
+          <button className="btn ghost small" onClick={() => setWhy(!why)} aria-expanded={why}>
+            {why ? "Hide reasons" : `Why? (${because.length})`}
+          </button>
+          {why && (
+            <ul className="because">
+              {because.map((b, i) => (
+                <li key={i}>
+                  <Icon name="known" size={14} />
+                  <span>Because: {b.text}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </>
+      )}
       {items.length > 0 && (
-        <ul className="plain">
+        <ul className="list">
           {items.map((i) => (
-            <li key={i.id}>
-              <a href={`#/item/${i.id}`}>{i.title}</a> <span className="muted small">{localDate(i.created_at)}</span>
+            <li key={i.id} className="irow">
+              <a className="body" href={`#/item/${i.id}`} onClick={onClose}>
+                <span className="title">{i.title}</span>
+                <span className="meta">
+                  {i.status_line ? <span className={`tone-${i.status_line.tone}`}>{i.status_line.text}</span> : localDate(i.created_at)}
+                </span>
+              </a>
+              <Icon name="chevronRight" className="chev" size={18} />
             </li>
           ))}
         </ul>
       )}
-      <button className="link" onClick={onClose}>
-        Close
-      </button>
     </div>
   );
 }
@@ -246,14 +295,24 @@ export function ConfirmCard({
   );
 
   return (
-    <div className="card confirm" onPointerDown={() => setTouched(true)}>
+    <div className="card confirm gold" onPointerDown={() => setTouched(true)}>
+      <p className="small muted">
+        <Icon name="check" size={14} className="tone-ok" /> Saved
+      </p>
       <div className="chips">
         {chip("title", item.title, "title")}
         {chip("for", item.for_person ? `for ${item.for_person.name}` : null, "+ for")}
         {chip("by", item.requested_by ? `asked by ${item.requested_by.name}` : null, "+ asked by")}
         {chip("when", when(item), "+ when")}
         {chip("place", item.place_hint, "+ place")}
+        {item.subtype && <span className="pill">{item.subtype.replace(/_/g, " ")}</span>}
+        {item.recurrence_text && (
+          <span className="pill">
+            <Icon name="repeat" size={12} /> {item.recurrence_text}
+          </span>
+        )}
       </div>
+      {item.status_line && <p className={`small tone-${item.status_line.tone}`}>{item.status_line.text}</p>}
       {item.confidence != null && item.confidence < 0.6 && <p className="muted small">Not sure I got this right. Tap anything to fix it.</p>}
 
       {editing === "title" && <TextEdit value={item.title} onSave={(v) => patch({ title: v })} />}
@@ -264,13 +323,13 @@ export function ConfirmCard({
 
       {question && (
         <form className="question" onSubmit={answerQuestion}>
-          <label>
+          <label className="field">
             {question.question}
             <input value={answer} onChange={(e) => setAnswer(e.target.value)} />
           </label>
           <div className="row">
-            <button className="primary">Save</button>
-            <button type="button" className="link" onClick={onDone}>
+            <button className="btn primary">Save</button>
+            <button type="button" className="btn ghost" onClick={onDone}>
               Skip
             </button>
           </div>
@@ -278,7 +337,7 @@ export function ConfirmCard({
       )}
       {err && <p className="error">{err}</p>}
       {!question && touched && (
-        <button className="link" onClick={onDone}>
+        <button className="btn ghost" onClick={onDone}>
           Done
         </button>
       )}
@@ -297,7 +356,7 @@ function TextEdit({ value, onSave }: { value: string; onSave: (v: string) => voi
       }}
     >
       <input value={v} onChange={(e) => setV(e.target.value)} autoFocus maxLength={200} />
-      <button className="primary">Save</button>
+      <button className="btn primary">Save</button>
     </form>
   );
 }
@@ -339,18 +398,20 @@ export function WhenEdit({ item, onSave }: { item: Item; onSave: (b: Record<stri
         onSave({ start_date: s, end_date: e && e >= s ? e : s });
       }}
     >
-      <label>
-        From <input type="date" value={s} onChange={(x) => setS(x.target.value)} />
-      </label>
-      <label>
-        To <input type="date" value={e} onChange={(x) => setE(x.target.value)} />
-      </label>
-      <label>
-        At <input type="time" value={t} onChange={(x) => setT(x.target.value)} />
+      <div className="row">
+        <label className="field">
+          From <input type="date" value={s} onChange={(x) => setS(x.target.value)} />
+        </label>
+        <label className="field">
+          To <input type="date" value={e} onChange={(x) => setE(x.target.value)} />
+        </label>
+      </div>
+      <label className="field">
+        At (optional) <input type="time" value={t} onChange={(x) => setT(x.target.value)} />
       </label>
       <div className="row">
-        <button className="primary">Save</button>
-        <button type="button" className="link" onClick={() => onSave({ start_date: null })}>
+        <button className="btn primary">Save</button>
+        <button type="button" className="btn ghost" onClick={() => onSave({ start_date: null })}>
           No date
         </button>
       </div>

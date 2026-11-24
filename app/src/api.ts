@@ -65,8 +65,28 @@ export interface Item {
   place_hint: string | null;
   confidence: number | null;
   snoozed_until: string | null;
+  recurrence: string | null;
+  recurrence_text: string | null;
+  status_line: { text: string; tone: "ok" | "warn" | "bad" | "muted" } | null;
+  thing: PersonRef | null;
+  from_reminder: boolean;
   created_at: string;
   updated_at: string;
+}
+export interface Because {
+  kind?: string;
+  ref: string | null;
+  text: string;
+}
+export interface Tip {
+  id: string;
+  rule: string;
+  title: string;
+  body: string;
+  wording: string | null;
+  because: Because[];
+  domain: "none" | "health" | "finance" | "legal" | string;
+  item_id: string | null;
 }
 export interface Person {
   id: string;
@@ -83,7 +103,7 @@ export interface GapQuestion {
 }
 export type CaptureResult =
   | { type: "capture"; item: Item; question: GapQuestion | null; duplicate?: boolean }
-  | { type: "answer"; answer: string; items: Item[]; disclaimer?: string | null; advice?: boolean };
+  | { type: "answer"; answer: string; items: Item[]; disclaimer?: string | null; advice?: boolean; because?: Because[] };
 
 // ---- offline capture queue (local storage is only a cache; the server is the source of truth) ----
 
