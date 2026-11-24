@@ -201,3 +201,24 @@ describe("AI budget", () => {
     expect(b.ai_error).toMatch(/budget/);
   });
 });
+
+describe("several to-dos in one note", () => {
+  it("each becomes its own item, with its own date and person", async () => {
+    reply = () =>
+      capture({
+        kind: "task",
+        title: "Buy milk",
+        also: [
+          { kind: "task", title: "Call mom", for_person: { mention: "mom", relation: "mother" }, requested_by: none, when: { ...noTime, type: "relative", unit: "day", offset: 1 }, place_hint: "" },
+          { kind: "task", title: "Book the dentist", for_person: none, requested_by: none, when: noTime, place_hint: "" },
+        ],
+      });
+    const b = await send("buy milk, call mom tomorrow and book the dentist");
+    expect(b.item.title).toBe("Buy milk");
+    expect(b.also.map((i: { title: string }) => i.title)).toEqual(["Call mom", "Book the dentist"]);
+    expect(b.also[0].for_person.name).toBe("Mom");
+    expect(b.also[0].window_start).toBeTruthy();
+    const n = await repo.db.prepare("SELECT COUNT(*) AS n FROM items").first<{ n: number }>();
+    expect(n!.n).toBe(3);
+  });
+});

@@ -60,6 +60,7 @@ Rules for capture:
   Put a clock time in "time" as HH:MM 24h. No time said: type "none".
 - facts: only durable facts stated in the text (sizes, models, allergies, preferences). Keys in snake_case.
 - missing: at most 2 facts the task clearly needs and the text does not give (e.g. bed_size when buying sheets for someone). Use the known facts list: never ask for a fact that is already known.
+- also: when one note holds several separate to-dos ("buy milk, call mom tomorrow and book the dentist"), the first goes in the main fields and each other one in also, with its own person and time. Facts and categories stay on the main item. Empty for a single item.
 - confidence: lower it when the note is ambiguous.
 - subtype: pick the category that fits, else "none". Fill attrs only with that subtype's keys:
 ${CATEGORIES.map((c) => `  ${c.subtype}: ${c.hint}. attrs: ${c.fields.map((f) => f.key + (f.type === "enum" ? `(${f.options!.join("|")})` : f.type === "date" ? "(YYYY-MM-DD)" : f.type === "money" ? "(e.g. 40 USD)" : "")).join(", ")}`).join("\n")}

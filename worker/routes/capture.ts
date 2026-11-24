@@ -149,6 +149,7 @@ export async function handleCapture(repo: Repo, req: Request, tz: string, opts: 
     recurrence: null,
     facts: [],
     missing: [],
+    also: [],
   };
 
   const forP = await resolveMention(repo, people, cap.for_person, true);
@@ -247,6 +248,43 @@ export async function handleCapture(repo: Repo, req: Request, tz: string, opts: 
     break;
   }
 
+  // More to-dos in the same note: each becomes its own item, with its own capture row (same text) so search finds it;
+  // the cron embeds those within minutes.
+  const alsoItems: string[] = [];
+  for (const a of (cap.also ?? []).slice(0, 5)) {
+    const extraCapture = ulid();
+    const extraItem = ulid();
+    const w = resolveTimeRef(a.when, now, tz);
+    const f = await resolveMention(repo, people, a.for_person, true);
+    const r = await resolveMention(repo, people, a.requested_by, true);
+    await repo.db.batch([
+      repo.db
+        .prepare("INSERT INTO captures (id, created_at, source, raw_text_enc, transcript_enc, client_id, parse_enc, parser_version, model) VALUES (?, ?, ?, ?, NULL, NULL, NULL, ?, ?)")
+        .bind(extraCapture, iso, source, await repo.cipher.encrypt(text, `captures:${extraCapture}:raw_text`), PARSER_VERSION, model),
+      repo.db
+        .prepare(
+          `INSERT INTO items (id, capture_id, kind, title_enc, for_person_id, requested_by_person_id, window_start, window_end, due_at, status, place_hint, confidence, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?)`,
+        )
+        .bind(
+          extraItem,
+          extraCapture,
+          a.kind,
+          await repo.cipher.encrypt(a.title.slice(0, 200), `items:${extraItem}:title`),
+          f?.id ?? null,
+          r?.id ?? null,
+          w ? w.start.toISOString() : null,
+          w ? w.end.toISOString() : null,
+          w?.dueAt ? w.dueAt.toISOString() : null,
+          a.place_hint?.slice(0, 100) ?? null,
+          confidence,
+          iso,
+          iso,
+        ),
+    ]);
+    alsoItems.push(extraItem);
+  }
+
   // Embedding failures must not lose the capture.
   try {
     await storeVector(repo.env, captureId, itemId, iso, await embed(repo.env, text));
@@ -255,7 +293,8 @@ export async function handleCapture(repo: Repo, req: Request, tz: string, opts: 
   }
 
   const row = (await repo.getItemRow(itemId))!;
-  return json({ type: "capture", item: (await repo.itemViews([row]))[0], question, ai_error: aiError });
+  const extraRows = (await Promise.all(alsoItems.map((id) => repo.getItemRow(id)))).filter((x) => x !== null);
+  return json({ type: "capture", item: (await repo.itemViews([row]))[0], also: await repo.itemViews(extraRows), question, ai_error: aiError });
 }
 
 function toAnswerItems(views: Awaited<ReturnType<Repo["itemViews"]>>, tz: string): AnswerItem[] {

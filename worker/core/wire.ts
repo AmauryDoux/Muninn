@@ -65,6 +65,18 @@ const WireCapture = z.object({
       }),
     )
     .describe("At most 2 facts that the task needs and the text does not give."),
+  also: z
+    .array(
+      z.object({
+        kind: z.enum(["task", "note", "event"]),
+        title: z.string().describe("Short imperative, 2-8 words."),
+        for_person: Mention,
+        requested_by: Mention,
+        when: TimeRef,
+        place_hint: z.string().describe('Kind of place, else "".'),
+      }),
+    )
+    .describe("Other separate to-dos in the same note, beyond the main one above: 'buy milk, call mom tomorrow and book the dentist' = main 'Buy milk', also ['Call mom' tomorrow, 'Book the dentist']. At most 5. Empty for a single item."),
 });
 
 const WireRecall = z.object({
@@ -132,6 +144,10 @@ export function toParseOutput(w: WireParse): ParseOutput {
               },
         facts: c.facts.map((f) => ({ subject: f.about_thing ? null : mention(f.subject), about_thing: f.about_thing, key: f.key, value: f.value })),
         missing: c.missing.map((m) => ({ subject: mention(m.subject), key: m.key, question: m.question })),
+        also: (c.also ?? [])
+          .filter((a) => str(a.title))
+          .slice(0, 5)
+          .map((a) => ({ kind: a.kind, title: a.title.trim(), for_person: mention(a.for_person), requested_by: mention(a.requested_by), when: time(a.when), place_hint: str(a.place_hint) })),
       }
     : null;
   const r = w.recall;

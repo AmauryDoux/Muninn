@@ -32,7 +32,7 @@ describe("toParseOutput", () => {
         kind: "note", title: "Blue Lego set", details: "", for_person: { mention: "Emma", relation: "daughter" }, requested_by: blankMention,
         when: noTime, place_hint: "", confidence: 0.9, subtype: "gift_idea", attrs: [{ key: "price", value: "40 USD" }],
         thing_name: "", thing_kind: "", repeat: "none", repeat_interval: 1, repeat_months: [], repeat_weekdays: [],
-        facts: [{ subject: blankMention, about_thing: false, key: "likes", value: "Lego" }], missing: [],
+        facts: [{ subject: blankMention, about_thing: false, key: "likes", value: "Lego" }], missing: [], also: [],
       },
     });
     const c = out.capture!;
@@ -53,7 +53,7 @@ describe("toParseOutput", () => {
         kind: "task", title: "Change AC filter", details: "", for_person: blankMention, requested_by: blankMention,
         when: { ...noTime, type: "weekday", weekday: 0, offset: 0, time: "09:00" }, place_hint: "null", confidence: 1, subtype: "none", attrs: [],
         thing_name: "AC", thing_kind: "appliance", repeat: "monthly", repeat_interval: 3, repeat_months: [], repeat_weekdays: [],
-        facts: [], missing: [],
+        facts: [], missing: [], also: [],
       },
     });
     const c = out.capture!;

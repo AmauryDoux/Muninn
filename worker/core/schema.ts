@@ -69,6 +69,19 @@ export const CaptureSchema = z.object({
       }),
     )
     .describe("At most 2 facts that the task needs and the text does not give, e.g. bed_size for buying sheets."),
+  /** More to-dos from the same note ("buy milk and call mom"). Internal only; the wire schema carries them. */
+  also: z
+    .array(
+      z.object({
+        kind: z.enum(["task", "note", "event"]),
+        title: z.string(),
+        for_person: PersonMentionSchema.nullable(),
+        requested_by: PersonMentionSchema.nullable(),
+        when: TimeRefSchema,
+        place_hint: z.string().nullable(),
+      }),
+    )
+    .default([]),
 });
 
 export const RecallSchema = z.object({
