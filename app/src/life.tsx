@@ -452,7 +452,7 @@ export function ThingDetail({ id, onBack }: { id: string; onBack: () => void }) 
 function FieldPair({ k, v }: { k: string; v: string | undefined }) {
   return (
     <>
-      <div className="k">{k.replace(/_/g, " ")}</div>
+      <div className="k">{k.charAt(0).toUpperCase() + k.slice(1).replace(/_/g, " ")}</div>
       <div className="v">{v || "—"}</div>
     </>
   );

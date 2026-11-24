@@ -1,5 +1,5 @@
 // Pure: move a recurring item to its next occurrence when it is completed.
-import { addDays, cmp, diffDays, type CivilDate } from "./civil";
+import { addDays, cmp, daysInMonth, diffDays, type CivilDate } from "./civil";
 import { nextOccurrence, parseRule } from "./rrule";
 import { civilOf, localParts, startOfLocalDay, zonedToUtc } from "./time";
 
@@ -40,6 +40,15 @@ export function firstWindow(rrule: string, now: Date, tz: string, anchorMonthDay
   const rule = parseRule(rrule);
   if (!rule) return null;
   const today = civilOf(now, tz);
+  // "Every November" added on 24 November is due now (the rest of this month), not next November.
+  if (rule.freq === "YEARLY" && rule.byMonth?.includes(today.month) && rule.byMonthDay == null && !anchorMonthDay) {
+    const endOfMonth = { year: today.year, month: today.month, day: daysInMonth(today.year, today.month) };
+    return {
+      window_start: startOfLocalDay(today, tz).toISOString(),
+      window_end: startOfLocalDay(addDays(endOfMonth, 1), tz).toISOString(),
+      due_at: null,
+    };
+  }
   // "Every year in October" with no day starts on the 1st; dtstart a year back so this year's October counts.
   const dtstart = anchorMonthDay ?? (rule.byMonth ? { year: today.year - 1, month: rule.byMonth[0], day: 1 } : today);
   const first = nextOccurrence(rule, dtstart, today);
