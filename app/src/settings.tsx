@@ -123,6 +123,16 @@ export function Settings({ onSignedOut }: { onSignedOut: () => void }) {
             </li>
           ))}
         </ul>
+        <Toggle
+          on={form.push_titles !== "0"}
+          label="Show what is due in notifications"
+          hint="Notifications are encrypted to your phone; Apple can't read them. To hide them on the lock screen: iPhone Settings, Notifications, Show Previews, When Unlocked."
+          onToggle={() => {
+            const v = form.push_titles === "0" ? "1" : "0";
+            setForm({ ...form, push_titles: v });
+            api("/api/settings", { method: "PUT", body: { push_titles: v } }).catch((e) => setMsg(errText(e)));
+          }}
+        />
       </section>
 
       <form className="card" onSubmit={save}>

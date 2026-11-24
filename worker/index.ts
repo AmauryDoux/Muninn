@@ -150,7 +150,12 @@ async function api(req: Request, env: Env): Promise<Response> {
   }
   if ((mm = path.match(new RegExp(`^/api/tokens/${ID}$`))) && m === "DELETE") return deleteToken(repo, mm[1]);
 
-  if (path === "/api/push/subscribe" && m === "POST") return subscribePush(repo, req);
+  // Pushes can carry item titles, so adding a device that receives them needs a fresh Face ID or password check:
+  // otherwise a stolen session could subscribe its own browser and read your reminders.
+  if (path === "/api/push/subscribe" && m === "POST") {
+    requireFresh(session);
+    return subscribePush(repo, req);
+  }
   if (path === "/api/push/unsubscribe" && m === "POST") return unsubscribePush(repo, req);
   if (path === "/api/push/test" && m === "POST") return testPush(repo);
   if (path === "/api/devices" && m === "GET") return listDevices(repo);

@@ -11,6 +11,8 @@ import { buildExport, pushAll } from "./routes/misc";
 import { refreshPatterns, refreshTips, refreshWeather } from "./advice";
 import { fireTriggers } from "./engine";
 import { inQuietHours } from "./core/time";
+import { briefNotice, reminderNotice } from "./core/notify";
+import { getSetting } from "./lib/settings";
 
 export async function runScheduled(env: Env, now = new Date()): Promise<void> {
   const settings = await getSettingsMap(env.DB);
@@ -75,21 +77,28 @@ async function reminders(repo: Repo, rs: ReturnType<typeof reminderSettings>, no
     return;
   }
 
-  let payload;
-  if (plan.brief) {
-    const parts = [`${g.today.length} for today`];
-    if (g.overdue.length) parts.push(`${g.overdue.length} overdue`);
-    payload = { title: "Morning brief", body: parts.join(", "), url: "/?view=brief", tag: "brief" };
-  } else {
-    const n = plan.reminders.length;
-    const ending = plan.reminders.every((r) => r.kind === "end");
-    payload = {
-      title: "Muninn",
-      body: ending ? `${n} item${n > 1 ? "s" : ""} ending soon` : `Reminder: ${n} item${n > 1 ? "s" : ""} due`,
-      url: "/?view=today",
-      tag: "reminder",
-    };
-  }
+  // Titles are decrypted only for the push itself, and only when the user allows them.
+  const showTitles = (await getSetting(db, "push_titles")) !== "0";
+  const titlesOf = async (ids: string[]): Promise<string[] | null> => {
+    if (!showTitles || !ids.length) return null;
+    try {
+      const rows = (await Promise.all(ids.slice(0, 10).map((id) => repo.getItemRow(id)))).filter((r) => r !== null);
+      return (await repo.itemViews(rows)).map((v) => v.title);
+    } catch (e) {
+      // A title that won't decrypt must not stop the reminder: fall back to counts.
+      console.warn("push titles unavailable", e instanceof Error ? e.message : e);
+      return null;
+    }
+  };
+  const badge = g.today.length + g.overdue.length;
+  const payload = plan.brief
+    ? briefNotice({ today: g.today.length, overdue: g.overdue.length, titles: await titlesOf([...g.overdue, ...g.today].map((i) => i.id)) })
+    : reminderNotice({
+        ids: [...new Set(plan.reminders.map((r) => r.itemId))],
+        titles: await titlesOf([...new Set(plan.reminders.map((r) => r.itemId))]),
+        ending: plan.reminders.every((r) => r.kind === "end"),
+        badge,
+      });
   const delivered = await pushAll(repo, payload);
   const iso = now.toISOString();
   if (delivered === 0) {

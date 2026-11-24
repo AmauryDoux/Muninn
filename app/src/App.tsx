@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api, flushQueue, queuedCount, setAuthHandlers, type Item, type Person, type Tip } from "./api";
 import { Login, Reauth, Setup, errText, registerPasskey } from "./auth";
 import { CaptureBox } from "./capture";
+import { setBadge } from "./badge";
 import { setTz } from "./fmt";
 import { Icon } from "./icons";
 import { DoneList, ItemDetail, OpenList } from "./items";
@@ -98,7 +99,16 @@ function Main({ hasPasskey, onSignedOut, onPasskeyAdded }: { hasPasskey: boolean
 
   const loadItems = useCallback(() => api<{ items: Item[] }>("/api/items?view=open").then((r) => setItems(r.items)), []);
   const loadPeople = useCallback(() => api<{ people: Person[] }>("/api/people").then((r) => setPeople(r.people)), []);
-  const loadBrief = useCallback(() => api<Brief>("/api/brief").then(setBrief).catch(() => {}), []);
+  const loadBrief = useCallback(
+    () =>
+      api<Brief>("/api/brief")
+        .then((b) => {
+          setBrief(b);
+          setBadge(b.today.length + b.overdue.length);
+        })
+        .catch(() => {}),
+    [],
+  );
 
   // A typed name in a form may have created a person: reload the list everywhere.
   useEffect(() => {

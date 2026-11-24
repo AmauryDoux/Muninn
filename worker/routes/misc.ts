@@ -47,8 +47,20 @@ export async function deleteDevice(repo: Repo, id: string): Promise<Response> {
   return json({ ok: true });
 }
 
-/** Push to every device now. Payloads never carry item text (Apple and Google can see them). */
-export async function pushAll(repo: Repo, payload: { title: string; body: string; url: string; tag: string }): Promise<number> {
+export interface PushPayload {
+  title: string;
+  body: string;
+  url: string;
+  tag: string;
+  /** Open items for today plus overdue, for the Home Screen icon badge. */
+  badge?: number;
+}
+
+/**
+ * Push to every device now. Payloads are end-to-end encrypted to the device (RFC 8291): Apple and Google relay them
+ * but cannot read them. Item titles are included only when the user allows it (`push_titles`).
+ */
+export async function pushAll(repo: Repo, payload: PushPayload): Promise<number> {
   const env = repo.env;
   if (!env.VAPID_PUBLIC_KEY || !env.VAPID_PRIVATE_KEY) {
     console.warn("VAPID keys not configured; push skipped");
@@ -96,6 +108,7 @@ export async function getSettings(repo: Repo): Promise<Response> {
     currency: "USD",
     tips_enabled: "1",
     tips_ai: "0",
+    push_titles: "1",
   };
   for (const k of USER_SETTING_KEYS) out[k] = m.get(k) ?? defaults[k] ?? null;
   return json({ settings: out, vapid_public_key: repo.env.VAPID_PUBLIC_KEY || null, vectorize: !!repo.env.VECTORIZE });
@@ -123,7 +136,7 @@ export async function putSettings(repo: Repo, req: Request): Promise<Response> {
       const lim = k === "home_lat" ? 90 : 180;
       if (s === "" || !Number.isFinite(n) || Math.abs(n) > lim) throw new HttpError(400, `bad_${k}`);
       val = n.toFixed(2);
-    } else if (k === "tips_enabled" || k === "tips_ai") {
+    } else if (k === "tips_enabled" || k === "tips_ai" || k === "push_titles") {
       if (s !== "0" && s !== "1") throw new HttpError(400, `bad_${k}`);
     } else if (!HHMM.test(s)) throw new HttpError(400, `bad_${k}`);
     await setSetting(repo.db, k, val);

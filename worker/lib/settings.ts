@@ -31,6 +31,7 @@ export const USER_SETTING_KEYS = [
   "home_lon",
   "tips_enabled",
   "tips_ai",
+  "push_titles",
 ] as const;
 
 export function reminderSettings(m: Map<string, string>): ReminderSettings {
