@@ -13,12 +13,14 @@ Worker ──▶ D1 (encrypted columns) · Workers AI (embeddings, Whisper) · A
 ## Code layout
 | Path | What |
 |---|---|
-| `worker/core/` | Pure logic, no I/O, unit-tested: dates and time references, reminders and push planning, people matching, recall SQL builder, item grouping, cost estimates, model output schemas |
+| `worker/core/` | Pure logic, no I/O, unit-tested: civil dates (`civil.ts`), RRULE subset (`rrule.ts`), trigger scheduling (`triggers.ts`), categories and their attrs (`categories.ts`), money, streaks, clustering, seasonal + weather signals, patterns, tip rules (`tips.ts`), dates and time references, reminders and push planning, people matching, recall SQL builder, item grouping, cost estimates, model output schemas |
 | `worker/lib/` | Crypto (AES-GCM per field, HMAC), web push (VAPID + RFC 8291), HTTP helpers, settings, ULIDs, usage logging |
 | `worker/auth.ts` | Setup code, username + password, passkeys (SimpleWebAuthn), sessions, rate limits, fresh-check for sensitive screens |
+| `worker/engine.ts` | Life engine I/O: attrs, things, trigger sync and firing, recurring roll-forward |
+| `worker/advice.ts` | Tip refresh/selection, pattern and weather refresh |
 | `worker/ai.ts`, `worker/brief.ts` | Every model call |
 | `worker/routes/` | Capture/recall/advice, items, profile (people, facts, patterns), push, settings, usage, export |
-| `worker/scheduled.ts` | Reminders, morning brief, housekeeping, weekly backup |
+| `worker/scheduled.ts` | Trigger firing, reminders, morning brief, patterns (03:00), weather (05:00), tips (06:00), ideas digest (Sun 18:00), housekeeping, weekly backup; each job isolated |
 | `app/src/` | React 19 PWA |
 | `migrations/` | D1 schema |
 
@@ -48,3 +50,9 @@ All under `/api`, JSON, same-origin `Origin` required on writes.
 | `GET /know`, `PATCH /patterns/:id`, `GET /export` | fresh | |
 | `POST /push/{subscribe,unsubscribe,test}`, `GET /devices`, `DELETE /devices/:id` | session | |
 | `GET|PUT /settings`, `GET /usage?month=` | session | |
+| `GET /life`, `GET|POST /life/items?subtype=`, `PATCH /life/items/:id` | session | Categories (attrs replaced whole on PATCH) |
+| `POST /life/seasonal-starter` | session | Adds the seasonal template items |
+| `GET /dates` | session | Upcoming birthdays, anniversaries, expiries |
+| `GET|POST /things`, `GET|PATCH|DELETE /things/:id` | session (delete: fresh) | Home inventory |
+| `GET /tips`, `POST /tips/:id` (`act|snooze|dismiss`) | session | Proactive tips |
+| `GET /digest` | session | Ideas grouped by similarity |

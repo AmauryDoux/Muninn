@@ -55,7 +55,16 @@ Recommended hardening:
 - Cloudflare: hardware-key 2FA on the account; a custom domain if you want one (passkeys are bound to the hostname, so pick it before registering passkeys).
 - GitHub: secret scanning and push protection on.
 
+## Update an existing install
+```bash
+git pull
+npm ci
+npm run db:migrate:remote   # only when migrations/ changed
+npm run deploy
+```
+
 ### Optional
+- **Weather-aware seasonal tips**: Settings → Life → Use my location (rounded to about 1 km, sent to Open-Meteo once a day).
 - **Vectorize** (if your plan includes it for free): `npx wrangler vectorize create muninn-captures-v1 --dimensions=768 --metric=cosine`, then uncomment the binding in `wrangler.jsonc`. Without it, search runs over vectors stored in D1 (fine for the first few thousand notes).
 - **Weekly encrypted backup to R2**: `npx wrangler r2 bucket create muninn-backups`, then uncomment the binding.
 - **Deploy from GitHub Actions**: add secrets `CLOUDFLARE_API_TOKEN` (scoped to Workers Scripts:Edit and D1:Edit on this account) and `CLOUDFLARE_ACCOUNT_ID`, and the variable `DEPLOY_ENABLED=true`.
