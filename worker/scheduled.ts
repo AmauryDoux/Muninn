@@ -92,6 +92,13 @@ async function reminders(repo: Repo, rs: ReturnType<typeof reminderSettings>, no
   }
   const delivered = await pushAll(repo, payload);
   const iso = now.toISOString();
+  if (delivered === 0) {
+    // Nothing reached a device: leave the reminders unmarked so the next run tries again, and record the failure
+    // (it does not count toward the daily cap).
+    console.warn("push not delivered; will retry", plan.reminders.length);
+    await recordPushFailure(db, iso, plan.brief ? "brief" : "reminder");
+    return;
+  }
   const stmts = plan.reminders.map((r) =>
     db.prepare(`UPDATE items SET ${r.kind === "start" ? "reminded_start_at" : "reminded_end_at"} = ? WHERE id = ?`).bind(iso, r.itemId),
   );
@@ -117,6 +124,7 @@ async function housekeeping(env: Env, now: Date) {
   await db.batch([
     db.prepare("DELETE FROM sessions WHERE expires_at < ?").bind(iso),
     db.prepare("DELETE FROM auth_attempts WHERE at < ?").bind(new Date(now.getTime() - 86400_000).toISOString()),
+    db.prepare("DELETE FROM events WHERE type = 'push_failed' AND at < ?").bind(new Date(now.getTime() - 30 * 86400_000).toISOString()),
     db.prepare("DELETE FROM settings WHERE key LIKE 'brief:%' AND key < ?").bind(`brief:${new Date(now.getTime() - 3 * 86400_000).toISOString().slice(0, 10)}`),
     ...expired.map((r) => db.prepare("DELETE FROM settings WHERE key = ?").bind(r.key)),
   ]);
@@ -146,8 +154,17 @@ async function ideasDigestPush(repo: Repo, rs: ReturnType<typeof reminderSetting
   const sent = await db.prepare("SELECT nudge_type FROM events WHERE type = 'push_sent' AND at >= ?").bind(dayStart).all<{ nudge_type: string }>();
   if (sent.results.some((r) => r.nudge_type === "digest") || sent.results.length >= rs.dailyCap) return;
   const delivered = await pushAll(repo, { title: "Your week", body: `${week.n} new idea${week.n > 1 ? "s" : ""} to look over`, url: "/?view=digest", tag: "digest" });
+  if (delivered === 0) return recordPushFailure(db, now.toISOString(), "digest");
   await db
     .prepare("INSERT INTO events (id, at, type, nudge_type, payload_json) VALUES (?, ?, 'push_sent', 'digest', ?)")
     .bind(crypto.randomUUID(), now.toISOString(), JSON.stringify({ items: week.n, devices: delivered }))
+    .run();
+}
+
+/** A push that reached no device. Kept as an event (not `push_sent`) so the health view can show it. */
+async function recordPushFailure(db: D1Database, iso: string, nudge: string): Promise<void> {
+  await db
+    .prepare("INSERT INTO events (id, at, type, nudge_type, payload_json) VALUES (?, ?, 'push_failed', ?, '{}')")
+    .bind(crypto.randomUUID(), iso, nudge)
     .run();
 }
