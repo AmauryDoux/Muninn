@@ -28,7 +28,9 @@ export async function api<T = unknown>(path: string, init: { method?: string; bo
     body = JSON.stringify(init.body);
     headers["Content-Type"] = "application/json";
   }
-  const res = await fetch(path, { method: init.method ?? (body ? "POST" : "GET"), headers, body, credentials: "same-origin" });
+  // Typed loosely: this file is also compiled against the Workers types (tests), whose RequestInit has no `credentials`.
+  const req: Record<string, unknown> = { method: init.method ?? (body ? "POST" : "GET"), headers, body, credentials: "same-origin" };
+  const res = await fetch(path, req as RequestInit);
   if (res.ok) return (res.headers.get("Content-Type")?.includes("json") ? res.json() : res.text()) as Promise<T>;
   let data: { error?: string; message?: string } = {};
   try {

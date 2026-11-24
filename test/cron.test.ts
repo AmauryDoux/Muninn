@@ -70,7 +70,7 @@ describe("reminder delivery", () => {
     const ua = (await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"])) as CryptoKeyPair;
     Object.assign(env, {
       VAPID_PUBLIC_KEY: toB64(await crypto.subtle.exportKey("raw", vapid.publicKey) as ArrayBuffer),
-      VAPID_PRIVATE_KEY: (await crypto.subtle.exportKey("jwk", vapid.privateKey)).d,
+      VAPID_PRIVATE_KEY: ((await crypto.subtle.exportKey("jwk", vapid.privateKey)) as JsonWebKey).d,
       VAPID_SUBJECT: "mailto:t@example.invalid",
     });
     await env.DB.prepare("INSERT INTO push_subscriptions (id, endpoint, p256dh, auth, created_at) VALUES ('s1', 'https://web.push.apple.com/x', ?, ?, ?)")

@@ -100,18 +100,41 @@ async function markFresh(env: Env, s: Session): Promise<void> {
   await env.DB.prepare("UPDATE sessions SET reauth_at = ? WHERE id_hash = ?").bind(new Date().toISOString(), s.idHash).run();
 }
 
-/** Count and record an attempt. Throws 429 past the per-IP or global limit. */
+/**
+ * Password guessing limits: per IP and in total, so rotating IPs does not help. Counts every attempt up front (so
+ * parallel guesses can't race past the limit); a success clears that IP's count. Only password checks and setup use
+ * the global cap. Passkey sign-in cannot be guessed, so it never touches it: otherwise anyone could keep the owner
+ * locked out just by asking for passkey challenges.
+ */
 async function rateLimit(env: Env, cipher: Cipher, req: Request): Promise<void> {
   const ipHash = await cipher.mac(`ip:${clientIp(req)}`);
   const since = new Date(Date.now() - ATTEMPT_WINDOW_MIN * 60_000).toISOString();
   const [perIp, global] = await env.DB.batch<{ n: number }>([
     env.DB.prepare("SELECT COUNT(*) AS n FROM auth_attempts WHERE ip_hash = ? AND at >= ?").bind(ipHash, since),
-    env.DB.prepare("SELECT COUNT(*) AS n FROM auth_attempts WHERE at >= ?").bind(since),
+    env.DB.prepare(`SELECT COUNT(*) AS n FROM auth_attempts WHERE at >= ? AND ip_hash NOT LIKE '${PASSKEY_PREFIX}%'`).bind(since),
   ]);
   if ((perIp.results[0]?.n ?? 0) >= ATTEMPTS_PER_IP || (global.results[0]?.n ?? 0) >= ATTEMPTS_GLOBAL) {
     throw new HttpError(429, "too_many_attempts", `Try again in ${ATTEMPT_WINDOW_MIN} minutes.`);
   }
   await env.DB.prepare("INSERT INTO auth_attempts (ip_hash, at) VALUES (?, ?)").bind(ipHash, new Date().toISOString()).run();
+}
+
+const PASSKEY_PREFIX = "pk:";
+const PASSKEY_FAILURES_PER_IP = 30;
+
+/** Passkey failures, per IP only. Stops one client from making the Worker verify junk all day; never blocks others. */
+async function passkeyIpKey(cipher: Cipher, req: Request): Promise<string> {
+  return PASSKEY_PREFIX + (await cipher.mac(`pk-ip:${clientIp(req)}`));
+}
+async function passkeyLimit(env: Env, cipher: Cipher, req: Request): Promise<void> {
+  const since = new Date(Date.now() - ATTEMPT_WINDOW_MIN * 60_000).toISOString();
+  const row = await env.DB.prepare("SELECT COUNT(*) AS n FROM auth_attempts WHERE ip_hash = ? AND at >= ?")
+    .bind(await passkeyIpKey(cipher, req), since)
+    .first<{ n: number }>();
+  if ((row?.n ?? 0) >= PASSKEY_FAILURES_PER_IP) throw new HttpError(429, "too_many_attempts", `Try again in ${ATTEMPT_WINDOW_MIN} minutes.`);
+}
+async function passkeyFailed(env: Env, cipher: Cipher, req: Request): Promise<void> {
+  await env.DB.prepare("INSERT INTO auth_attempts (ip_hash, at) VALUES (?, ?)").bind(await passkeyIpKey(cipher, req), new Date().toISOString()).run();
 }
 
 async function clearAttempts(env: Env, cipher: Cipher, req: Request): Promise<void> {
@@ -174,21 +197,35 @@ function validateCredentials(usernameRaw: unknown, password: unknown): { usernam
   return { username, password: p };
 }
 
-async function saveChallenge(env: Env, challenge: string, purpose: string): Promise<string> {
-  const id = randomToken(16);
-  await setSetting(env.DB, `challenge:${id}`, JSON.stringify({ challenge, purpose, exp: Date.now() + 5 * 60_000 }));
-  return cookie(CHALLENGE_COOKIE, id, 300);
+/**
+ * WebAuthn challenges travel in a signed cookie, so asking for one writes nothing to D1 (no storage to fill, no
+ * limit to trip). The cookie is HttpOnly, bound to its purpose, expires in 5 minutes, and is single use: a
+ * successful verify records it as used.
+ */
+async function saveChallenge(cipher: Cipher, challenge: string, purpose: string): Promise<string> {
+  const body = toB64url(utf8(JSON.stringify({ c: challenge, p: purpose, e: Date.now() + 5 * 60_000 })));
+  return cookie(CHALLENGE_COOKIE, `${body}.${await cipher.mac(`challenge:${body}`)}`, 300);
 }
 
-async function takeChallenge(env: Env, req: Request, purpose: string): Promise<string> {
-  const id = readCookie(req, CHALLENGE_COOKIE);
-  if (!id || id.length > 40) throw new HttpError(400, "no_challenge");
-  const raw = await getSetting(env.DB, `challenge:${id}`);
-  await env.DB.prepare("DELETE FROM settings WHERE key = ?").bind(`challenge:${id}`).run(); // single use
-  if (!raw) throw new HttpError(400, "no_challenge");
-  const c = JSON.parse(raw) as { challenge: string; purpose: string; exp: number };
-  if (c.exp < Date.now() || c.purpose !== purpose) throw new HttpError(400, "challenge_expired");
-  return c.challenge;
+async function takeChallenge(env: Env, cipher: Cipher, req: Request, purpose: string): Promise<{ challenge: string; used: () => Promise<void> }> {
+  const raw = readCookie(req, CHALLENGE_COOKIE);
+  if (!raw || raw.length > 600) throw new HttpError(400, "no_challenge");
+  const [body, mac] = raw.split(".");
+  if (!body || !mac || !(await cipher.macVerify(`challenge:${body}`, mac))) throw new HttpError(400, "no_challenge");
+  let c: { c: string; p: string; e: number };
+  try {
+    c = JSON.parse(new TextDecoder().decode(fromB64url(body)));
+  } catch {
+    throw new HttpError(400, "no_challenge");
+  }
+  if (c.e < Date.now() || c.p !== purpose) throw new HttpError(400, "challenge_expired");
+  const usedKey = `challenge:used:${await sha256b64url(body)}`;
+  if (await getSetting(env.DB, usedKey)) throw new HttpError(400, "challenge_expired");
+  return {
+    challenge: c.c,
+    // Housekeeping deletes it once `exp` has passed, like any `challenge:%` key.
+    used: () => setSetting(env.DB, usedKey, JSON.stringify({ exp: c.e })),
+  };
 }
 
 const clearChallenge = cookie(CHALLENGE_COOKIE, "", 0);
@@ -264,23 +301,27 @@ export async function handleAuth(env: Env, req: Request, path: string, cipher: C
   }
 
   if (path === "/api/auth/passkey/login/options" && req.method === "POST") {
-    await rateLimit(env, cipher, req);
     const { rpID } = rp(req);
     const opts = await generateAuthenticationOptions({ rpID, userVerification: "required" });
-    return json(opts, 200, { "Set-Cookie": await saveChallenge(env, opts.challenge, "login") });
+    return json(opts, 200, { "Set-Cookie": await saveChallenge(cipher, opts.challenge, "login") });
   }
 
   if ((path === "/api/auth/passkey/login/verify" || path === "/api/auth/passkey/reauth/verify") && req.method === "POST") {
     const purpose = path.includes("reauth") ? "reauth" : "login";
     const session = purpose === "reauth" ? await requireSession(env, req) : null;
-    const expectedChallenge = await takeChallenge(env, req, purpose);
+    await passkeyLimit(env, cipher, req);
+    const ch = await takeChallenge(env, cipher, req, purpose);
+    const expectedChallenge = ch.challenge;
     const response = await readJson<AuthenticationResponseJSON>(req, 16 * 1024);
     if (typeof response?.id !== "string") throw new HttpError(400, "bad_request");
     const row = await db
       .prepare("SELECT * FROM passkeys WHERE id = ?")
       .bind(response.id)
       .first<{ id: string; public_key: string; counter: number; transports: string | null }>();
-    if (!row) throw new HttpError(401, "bad_credentials");
+    if (!row) {
+      await passkeyFailed(env, cipher, req);
+      throw new HttpError(401, "bad_credentials");
+    }
     const { rpID, origin } = rp(req);
     let verified = false;
     let newCounter = row.counter;
@@ -303,7 +344,11 @@ export async function handleAuth(env: Env, req: Request, path: string, cipher: C
     } catch (e) {
       console.warn("passkey verify failed", e instanceof Error ? e.message : e);
     }
-    if (!verified) throw new HttpError(401, "bad_credentials");
+    if (!verified) {
+      await passkeyFailed(env, cipher, req);
+      throw new HttpError(401, "bad_credentials");
+    }
+    await ch.used();
     await db
       .prepare("UPDATE passkeys SET counter = ?, last_used_at = ? WHERE id = ?")
       .bind(newCounter, new Date().toISOString(), row.id)
@@ -325,7 +370,7 @@ export async function handleAuth(env: Env, req: Request, path: string, cipher: C
   if (path === "/api/auth/passkey/reauth/options" && req.method === "POST") {
     const { rpID } = rp(req);
     const opts = await generateAuthenticationOptions({ rpID, userVerification: "required" });
-    return json(opts, 200, { "Set-Cookie": await saveChallenge(env, opts.challenge, "reauth") });
+    return json(opts, 200, { "Set-Cookie": await saveChallenge(cipher, opts.challenge, "reauth") });
   }
 
   if (path === "/api/auth/reauth" && req.method === "POST") {
@@ -351,12 +396,13 @@ export async function handleAuth(env: Env, req: Request, path: string, cipher: C
       excludeCredentials: existing.results.map((c) => ({ id: c.id, transports: c.transports ? JSON.parse(c.transports) : undefined })),
       authenticatorSelection: { residentKey: "required", userVerification: "required" },
     });
-    return json(opts, 200, { "Set-Cookie": await saveChallenge(env, opts.challenge, "register") });
+    return json(opts, 200, { "Set-Cookie": await saveChallenge(cipher, opts.challenge, "register") });
   }
 
   if (path === "/api/auth/passkey/register/verify" && req.method === "POST") {
     requireFresh(session);
-    const expectedChallenge = await takeChallenge(env, req, "register");
+    const ch = await takeChallenge(env, cipher, req, "register");
+    const expectedChallenge = ch.challenge;
     const body = await readJson<{ response: RegistrationResponseJSON; label?: unknown }>(req, 32 * 1024);
     const { rpID, origin } = rp(req);
     let info;
@@ -374,6 +420,7 @@ export async function handleAuth(env: Env, req: Request, path: string, cipher: C
       console.warn("passkey registration failed", e instanceof Error ? e.message : e);
       throw new HttpError(400, "registration_failed");
     }
+    await ch.used();
     await db
       .prepare("INSERT INTO passkeys (id, public_key, counter, transports, label, created_at) VALUES (?, ?, ?, ?, ?, ?)")
       .bind(
