@@ -27,6 +27,13 @@ class Stmt {
   exec() {
     return this.db.prepare(this.sql).run(...this.params);
   }
+  /** Like D1's batch: a SELECT returns its rows, anything else its change count. */
+  batchResult() {
+    if (/^\s*(select|with)\b/i.test(this.sql)) {
+      return { results: this.db.prepare(this.sql).all(...this.params).map((r) => ({ ...r })), meta: { changes: 0 } };
+    }
+    return { results: [], meta: { changes: Number(this.exec().changes) } };
+  }
 }
 
 export function makeD1(): D1Database {
@@ -38,7 +45,7 @@ export function makeD1(): D1Database {
     batch: async (stmts: Stmt[]) => {
       db.exec("BEGIN");
       try {
-        const out = stmts.map((s) => ({ meta: { changes: Number(s.exec().changes) } }));
+        const out = stmts.map((s) => s.batchResult());
         db.exec("COMMIT");
         return out;
       } catch (e) {

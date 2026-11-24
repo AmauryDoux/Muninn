@@ -17,6 +17,21 @@ import type { ItemRow, Repo } from "../repo";
 import { searchVectors, storeVector } from "../vectors";
 
 const MAX_NOTE = 2000;
+const MAX_QUEUE_AGE_MS = 14 * 86400_000;
+const MAX_CLOCK_SKEW_MS = 5 * 60_000;
+
+/**
+ * When the note was written. A note queued offline is sent later with the time it was typed, so "tomorrow" means the
+ * day after it was written, not the day after it reached the server. Bounded: never in the future (beyond clock skew)
+ * and never older than 14 days, so a wrong phone clock cannot place notes anywhere.
+ */
+export function captureTime(raw: unknown, serverNow: Date): Date {
+  if (typeof raw !== "string" || raw.length > 40) return serverNow;
+  const t = Date.parse(raw);
+  if (!Number.isFinite(t)) return serverNow;
+  if (t > serverNow.getTime() + MAX_CLOCK_SKEW_MS) return serverNow;
+  return new Date(Math.max(t, serverNow.getTime() - MAX_QUEUE_AGE_MS));
+}
 
 export interface GapQuestion {
   subject_type: "person" | "me";
@@ -46,7 +61,7 @@ async function resolveMention(
 }
 
 export async function handleCapture(repo: Repo, req: Request, tz: string): Promise<Response> {
-  const body = await readJson<{ text?: unknown; source?: unknown; client_id?: unknown }>(req);
+  const body = await readJson<{ text?: unknown; source?: unknown; client_id?: unknown; captured_at?: unknown }>(req);
   const text = str(body.text, "text", MAX_NOTE).trim();
   if (!text) throw new HttpError(400, "empty");
   const source = body.source === "voice" ? "voice" : "text";
@@ -60,7 +75,7 @@ export async function handleCapture(repo: Repo, req: Request, tz: string): Promi
     if (dup) return json({ type: "capture", item: (await repo.itemViews([dup]))[0], question: null, duplicate: true });
   }
 
-  const now = new Date();
+  const now = captureTime(body.captured_at, new Date());
   const people = await repo.people();
   const factKeys = await repo.activeFactKeys();
   const nameOf = (id: string | null) => people.find((p) => p.id === id)?.name ?? "me";

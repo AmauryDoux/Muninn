@@ -28,7 +28,9 @@ export async function api<T = unknown>(path: string, init: { method?: string; bo
     body = JSON.stringify(init.body);
     headers["Content-Type"] = "application/json";
   }
-  const res = await fetch(path, { method: init.method ?? (body ? "POST" : "GET"), headers, body, credentials: "same-origin" });
+  // Typed loosely: this file is also compiled against the Workers types (tests), whose RequestInit has no `credentials`.
+  const req: Record<string, unknown> = { method: init.method ?? (body ? "POST" : "GET"), headers, body, credentials: "same-origin" };
+  const res = await fetch(path, req as RequestInit);
   if (res.ok) return (res.headers.get("Content-Type")?.includes("json") ? res.json() : res.text()) as Promise<T>;
   let data: { error?: string; message?: string } = {};
   try {
@@ -112,46 +114,72 @@ interface Queued {
   text: string;
   source: "text" | "voice";
   client_id: string;
+  /** When the note was typed, so "tomorrow" keeps its meaning when it is sent later. Missing on notes queued by older versions. */
+  captured_at?: string;
 }
 
 function readQueue(): Queued[] {
   try {
-    return JSON.parse(localStorage.getItem(QUEUE) ?? "[]");
+    const q = JSON.parse(localStorage.getItem(QUEUE) ?? "[]");
+    return Array.isArray(q) ? q : [];
   } catch {
     return [];
   }
 }
 function writeQueue(q: Queued[]) {
-  localStorage.setItem(QUEUE, JSON.stringify(q));
+  try {
+    localStorage.setItem(QUEUE, JSON.stringify(q));
+  } catch {
+    /* storage full or blocked: nothing more we can do here */
+  }
 }
 export function queuedCount() {
   return readQueue().length;
 }
 
+/**
+ * Whether a failed send should be kept and tried again. Only a request the server can never accept (bad input, too
+ * large) is dropped. Signed out (401), rate limited (429), server errors (5xx) and timeouts are temporary.
+ */
+export function isRetryable(e: unknown): boolean {
+  if (!(e instanceof ApiError)) return true; // network failure
+  return e.status === 401 || e.status === 403 || e.status === 408 || e.status === 429 || e.status >= 500;
+}
+
 export async function capture(text: string, source: "text" | "voice"): Promise<CaptureResult | { type: "queued" }> {
-  const client_id = crypto.randomUUID();
+  const item: Queued = { text, source, client_id: crypto.randomUUID(), captured_at: new Date().toISOString() };
   try {
-    return await api<CaptureResult>("/api/capture", { body: { text, source, client_id } });
+    return await api<CaptureResult>("/api/capture", { body: item });
   } catch (e) {
-    if (e instanceof ApiError) throw e;
-    // Network failure: keep it and send later.
-    writeQueue([...readQueue(), { text, source, client_id }]);
+    if (!isRetryable(e)) throw e;
+    // Offline, signed out or the server is struggling: keep it and send later.
+    writeQueue([...readQueue(), item]);
     return { type: "queued" };
   }
 }
 
-export async function flushQueue(): Promise<number> {
-  const q = readQueue();
-  let sent = 0;
-  for (const item of q) {
+let flushing: Promise<number> | null = null;
+
+/** Sends queued notes in order. Stops at the first temporary failure and keeps the rest. One flush at a time. */
+export function flushQueue(): Promise<number> {
+  flushing ??= (async () => {
+    let sent = 0;
     try {
-      await api("/api/capture", { body: item });
-      sent++;
-      writeQueue(readQueue().filter((x) => x.client_id !== item.client_id));
-    } catch (e) {
-      if (!(e instanceof ApiError)) break; // still offline
-      writeQueue(readQueue().filter((x) => x.client_id !== item.client_id)); // server rejected it; don't retry forever
+      for (const item of readQueue()) {
+        try {
+          // client_id makes a resend after a lost response harmless: the server returns the first result.
+          await api("/api/capture", { body: item });
+          sent++;
+        } catch (e) {
+          if (isRetryable(e)) break;
+          console.warn("queued note rejected", e);
+        }
+        writeQueue(readQueue().filter((x) => x.client_id !== item.client_id));
+      }
+    } finally {
+      flushing = null;
     }
-  }
-  return sent;
+    return sent;
+  })();
+  return flushing;
 }

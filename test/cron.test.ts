@@ -62,3 +62,44 @@ describe("cron over a full Sunday", () => {
     expect(reminded!.n).toBe(0);
   });
 });
+
+describe("reminder delivery", () => {
+  async function withPush() {
+    const toB64 = (b: ArrayBuffer | Uint8Array) => Buffer.from(b instanceof Uint8Array ? b : new Uint8Array(b)).toString("base64url");
+    const vapid = (await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign"])) as CryptoKeyPair;
+    const ua = (await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"])) as CryptoKeyPair;
+    Object.assign(env, {
+      VAPID_PUBLIC_KEY: toB64(await crypto.subtle.exportKey("raw", vapid.publicKey) as ArrayBuffer),
+      VAPID_PRIVATE_KEY: ((await crypto.subtle.exportKey("jwk", vapid.privateKey)) as JsonWebKey).d,
+      VAPID_SUBJECT: "mailto:t@example.invalid",
+    });
+    await env.DB.prepare("INSERT INTO push_subscriptions (id, endpoint, p256dh, auth, created_at) VALUES ('s1', 'https://web.push.apple.com/x', ?, ?, ?)")
+      .bind(toB64(await crypto.subtle.exportKey("raw", ua.publicKey) as ArrayBuffer), toB64(crypto.getRandomValues(new Uint8Array(16))), new Date().toISOString())
+      .run();
+  }
+
+  it("leaves reminders unmarked when no device got the push, and marks them once one does", async () => {
+    await withPush();
+    let status = 500;
+    vi.stubGlobal("fetch", async () => new Response("", { status }));
+    const due = "2026-11-24T16:00:00Z"; // 10:00 in Chicago
+    await env.DB.prepare(
+      "INSERT INTO items (id, kind, title_enc, status, window_start, window_end, due_at, created_at, updated_at) VALUES ('01J0000000000000000000000A', 'task', 'x', 'open', ?, ?, ?, ?, ?)",
+    )
+      .bind("2026-11-24T06:00:00Z", "2026-11-25T06:00:00Z", due, due, due)
+      .run();
+    const reminded = async () =>
+      (await env.DB.prepare("SELECT reminded_start_at AS r FROM items").first<{ r: string | null }>())!.r;
+
+    await runScheduled(env, new Date("2026-11-24T16:01:00Z"));
+    expect(await reminded()).toBeNull();
+    const failed = await env.DB.prepare("SELECT COUNT(*) AS n FROM events WHERE type = 'push_failed'").first<{ n: number }>();
+    expect(failed!.n).toBeGreaterThan(0);
+    expect(await env.DB.prepare("SELECT 1 FROM events WHERE type = 'push_sent'").first()).toBeNull();
+
+    status = 201;
+    await runScheduled(env, new Date("2026-11-24T16:06:00Z"));
+    expect(await reminded()).not.toBeNull();
+    expect(await env.DB.prepare("SELECT 1 FROM events WHERE type = 'push_sent'").first()).toBeTruthy();
+  });
+});
