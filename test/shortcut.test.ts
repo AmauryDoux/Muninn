@@ -147,3 +147,30 @@ describe("calendar feed", () => {
     expect((await shortcut("x", { Authorization: `Bearer ${cal}` })).status).toBe(401);
   });
 });
+
+describe("arrival nudges", () => {
+  it("pushes open items for the place to your devices and tells the caller only a count", async () => {
+    const { placeMatches } = await import("../worker/routes/tokens");
+    expect(placeMatches("cvs pharmacy", "pharmacy")).toBe(true);
+    expect(placeMatches("pharmacy", "the pharmacy")).toBe(true);
+    expect(placeMatches("carpet store", "car")).toBe(false);
+
+    const repo = new Repo(env, await Cipher.fromSecret(KEY), "America/Chicago");
+    const mk = await createToken(repo, new Request("https://m.test/api/tokens", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ scope: "nudge" }) }));
+    const nudge = ((await mk.json()) as { token: string }).token;
+    const cipher = await Cipher.fromSecret(KEY);
+    await env.DB.prepare("INSERT INTO items (id, kind, title_enc, status, place_hint, created_at, updated_at) VALUES ('01J0000000000000000000000P', 'task', ?, 'open', 'pharmacy', 'x', 'x')")
+      .bind(await cipher.encrypt("Pick up prescription", "items:01J0000000000000000000000P:title"))
+      .run();
+    const arrive = (tok: string, place: string) =>
+      worker.fetch(new Request("https://m.test/api/shortcut/arrive", { method: "POST", headers: { Authorization: `Bearer ${tok}`, "Content-Type": "text/plain" }, body: place }), env);
+
+    const r = await arrive(nudge, "CVS Pharmacy");
+    expect(r.status).toBe(200);
+    const b = (await r.json()) as Record<string, unknown>;
+    expect(b.count).toBe(1);
+    expect(JSON.stringify(b)).not.toContain("prescription");
+    // Other keys can't use it.
+    expect((await arrive(token, "pharmacy")).status).toBe(401);
+  });
+});

@@ -423,6 +423,16 @@ function Shortcuts({ onMsg }: { onMsg: (m: string) => void }) {
     }
   }
   const [calLink, setCalLink] = useState<string | null>(null);
+  const [nudgeKey, setNudgeKey] = useState<string | null>(null);
+  async function createNudge() {
+    try {
+      const r = await api<{ token: string }>("/api/tokens", { body: { scope: "nudge", label: "Arrival" } });
+      setNudgeKey(r.token);
+      load();
+    } catch (e) {
+      onMsg(errText(e));
+    }
+  }
   async function createCalendar() {
     try {
       const r = await api<{ token: string }>("/api/tokens", { body: { scope: "calendar", label: "Calendar" } });
@@ -486,6 +496,30 @@ function Shortcuts({ onMsg }: { onMsg: (m: string) => void }) {
       ) : (
         <button className="btn" onClick={createCalendar}>
           Add to Calendar
+        </button>
+      )}
+      <hr />
+      <p className="small">Arrival: "you're at the pharmacy, pick up the prescription".</p>
+      {nudgeKey ? (
+        <div className="notice">
+          <p className="small">Copy this key now. It is shown only once. It can only send a notification to your own devices.</p>
+          <code className="token">{nudgeKey}</code>
+          <div className="row">
+            <button className="btn small" onClick={() => copy(nudgeKey)}>Copy key</button>
+            <button className="btn small" onClick={() => copy(`${location.origin}/api/shortcut/arrive`)}>Copy address</button>
+            <button className="btn ghost small" onClick={() => setNudgeKey(null)}>Done</button>
+          </div>
+          <ol className="small steps">
+            <li>Shortcuts → Automation → New → Arrive, pick the store, Run Immediately.</li>
+            <li>
+              Add "Get Contents of URL": the address above, Method POST, Header <code>Authorization</code> = <code>Bearer</code> + space + the key,
+              Request Body "File" set to the kind of place, e.g. <code>pharmacy</code> (the same word Muninn shows on the item).
+            </li>
+          </ol>
+        </div>
+      ) : (
+        <button className="btn" onClick={createNudge}>
+          Create an arrival key
         </button>
       )}
       <ul className="plain">

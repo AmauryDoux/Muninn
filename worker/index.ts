@@ -40,7 +40,7 @@ import {
 import { runScheduled } from "./scheduled";
 import { getReview } from "./routes/review";
 import { deleteFile, getFile, listFiles, uploadFile } from "./routes/files";
-import { calendarFeed, createToken, deleteToken, listTokens, shortcutCapture } from "./routes/tokens";
+import { calendarFeed, createToken, deleteToken, listTokens, shortcutArrive, shortcutCapture } from "./routes/tokens";
 
 let cipherCache: { key: string; cipher: Promise<Cipher> } | null = null;
 function getCipher(env: Env): Promise<Cipher> {
@@ -60,6 +60,10 @@ async function api(req: Request, env: Env): Promise<Response> {
   if (path === "/api/shortcut/capture") {
     if (m !== "POST") throw new HttpError(405, "method_not_allowed");
     return shortcutCapture(env, req, await getCipher(env));
+  }
+  if (path === "/api/shortcut/arrive") {
+    if (m !== "POST") throw new HttpError(405, "method_not_allowed");
+    return shortcutArrive(env, req, await getCipher(env));
   }
 
   // Calendar subscription: read-only, token in the URL (calendar apps can't send headers).
