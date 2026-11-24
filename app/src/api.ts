@@ -102,7 +102,7 @@ export interface GapQuestion {
   question: string;
 }
 export type CaptureResult =
-  | { type: "capture"; item: Item; question: GapQuestion | null; duplicate?: boolean }
+  | { type: "capture"; item: Item; question: GapQuestion | null; duplicate?: boolean; ai_error?: string | null }
   | { type: "answer"; answer: string; items: Item[]; disclaimer?: string | null; advice?: boolean; because?: Because[] };
 
 // ---- offline capture queue (local storage is only a cache; the server is the source of truth) ----

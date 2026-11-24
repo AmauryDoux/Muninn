@@ -302,6 +302,28 @@ interface UsageResp {
   input_tokens: number;
   output_tokens: number;
   by_job: Record<string, { calls: number; usd: number; model: string; input_tokens: number; output_tokens: number }>;
+  last_error?: { at: string; job: string; status: number | null; message: string } | null;
+  last_success_at?: string | null;
+}
+
+function AiStatus({ u }: { u: UsageResp }) {
+  const err = u.last_error;
+  const failing = err && (!u.last_success_at || err.at > u.last_success_at);
+  const when = (iso: string) => new Date(iso).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
+  if (failing)
+    return (
+      <p className="ai-error small" role="status">
+        <strong>AI is failing.</strong> Last error {when(err.at)} ({JOB_LABELS[err.job] ?? err.job}): {err.status ? `${err.status} ` : ""}
+        {err.message}
+      </p>
+    );
+  if (u.last_success_at)
+    return (
+      <p className="ai-ok small" role="status">
+        <strong>AI is working.</strong> Last successful call {when(u.last_success_at)}.
+      </p>
+    );
+  return <p className="muted small">No AI calls yet.</p>;
 }
 
 const JOB_LABELS: Record<string, string> = {
@@ -330,6 +352,7 @@ function Usage() {
       </label>
       {u && (
         <>
+          <AiStatus u={u} />
           <p>
             <strong>${u.usd.toFixed(2)}</strong> <span className="muted small">estimated, {u.calls} calls</span>
           </p>

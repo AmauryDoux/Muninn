@@ -179,7 +179,18 @@ export async function getUsage(repo: Repo, url: URL): Promise<Response> {
     .bind(start, end)
     .all<{ payload_json: string }>();
   const rows = results.map((r) => JSON.parse(r.payload_json) as UsageRow);
-  return json({ month, ...summarize(rows) });
+  // Latest AI failure and the latest success, so the phone can show whether the AI works right now.
+  const lastErr = await repo.db
+    .prepare("SELECT at, payload_json FROM events WHERE type = 'model_error' ORDER BY at DESC LIMIT 1")
+    .first<{ at: string; payload_json: string }>();
+  const lastOk = await repo.db.prepare("SELECT at FROM events WHERE type = 'model_usage' ORDER BY at DESC LIMIT 1").first<{ at: string }>();
+  const err = lastErr ? (JSON.parse(lastErr.payload_json) as { job: string; status: number | null; message: string }) : null;
+  return json({
+    month,
+    ...summarize(rows),
+    last_error: err ? { at: lastErr!.at, job: err.job, status: err.status, message: err.message } : null,
+    last_success_at: lastOk?.at ?? null,
+  });
 }
 
 // ---- export ----

@@ -7,6 +7,8 @@ import { Cipher } from "../worker/lib/crypto";
 import { ulid } from "../worker/lib/ulid";
 import { Repo } from "../worker/repo";
 import { actOnItem } from "../worker/routes/items";
+import { handleCapture } from "../worker/routes/capture";
+import { getUsage } from "../worker/routes/misc";
 import { createLifeItem, lifeSummary, listThings, patchLifeItem } from "../worker/routes/life";
 import { DEFAULT_REMINDER_SETTINGS } from "../worker/core/reminders";
 import { zonedToUtc } from "../worker/core/time";
@@ -194,5 +196,17 @@ describe("applyCategory", () => {
     const row = await repo.getItemRow(id);
     await syncItemTriggers(repo, row!, TZ);
     expect(await triggers()).toEqual([]);
+  });
+});
+
+describe("AI failure is visible", () => {
+  it("a failed parse keeps the note, returns ai_error and shows in usage", async () => {
+    const r = await handleCapture(repo, req({ text: "Emma wants the blue Lego set" }), TZ);
+    const b = await body<{ type: string; item: { title: string }; ai_error: string | null }>(r);
+    expect(b.type).toBe("capture");
+    expect(b.item.title).toBe("Emma wants the blue Lego set");
+    expect(b.ai_error).toContain("ANTHROPIC_API_KEY");
+    const u = await body<{ last_error: { job: string; message: string } | null }>(await getUsage(repo, new URL("https://m.test/api/usage")));
+    expect(u.last_error).toMatchObject({ job: "parse" });
   });
 });

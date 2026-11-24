@@ -141,6 +141,11 @@ export function CaptureBox({ people, onCaptured }: { people: Person[]; onCapture
               </button>
             </div>
           )}
+          {result?.type === "capture" && result.ai_error && (
+            <p className="ai-error small" role="alert">
+              The AI could not read this ({result.ai_error}), so it was saved as a plain note. Check Settings → AI usage.
+            </p>
+          )}
           {result?.type === "capture" && (
             <ConfirmCard key={result.item.id} item={result.item} question={result.question} people={people} onDone={() => setResult(null)} onChanged={onCaptured} />
           )}

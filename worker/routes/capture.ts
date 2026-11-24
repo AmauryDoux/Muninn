@@ -8,6 +8,7 @@ import { recurrenceToRule } from "../core/rrule";
 import { DISCLAIMERS, PARSER_VERSION, type CaptureOut, type ParseOutput, type RecallOut } from "../core/schema";
 import { matchThing, thingTokens } from "../core/things";
 import { civilOf, civilToIso, resolveTimeRef } from "../core/time";
+import { logModelError } from "../lib/usage";
 import { addFactSmart, applyCategory, resolveThing, things, updateThingAttrs } from "../engine";
 import { getSetting } from "../lib/settings";
 import { HttpError, json, readJson, str } from "../lib/http";
@@ -65,6 +66,7 @@ export async function handleCapture(repo: Repo, req: Request, tz: string): Promi
   const nameOf = (id: string | null) => people.find((p) => p.id === id)?.name ?? "me";
   let out: ParseOutput | null = null;
   let model: string | null = repo.env.PARSE_MODEL;
+  let aiError: string | null = null;
   try {
     ({ out, model } = await parseNote(repo.env, text, {
       now,
@@ -75,8 +77,12 @@ export async function handleCapture(repo: Repo, req: Request, tz: string): Promi
   } catch (e) {
     // Never lose a capture because the model is down: keep the raw note and let the user fix it.
     console.error("parse failed", e instanceof Error ? e.message : e);
+    aiError = await logModelError(repo.db, "parse", e);
     model = null;
   }
+
+  if (!aiError && out && out.intent === "capture" && !out.capture) aiError = "The model returned no capture.";
+  if (!aiError && !out && model) aiError = "The model declined to read this note.";
 
   if (out?.intent === "recall" && out.recall) {
     return json({ type: "answer", ...(await recall(repo, text, out.recall, people, now, tz)) });
@@ -205,7 +211,7 @@ export async function handleCapture(repo: Repo, req: Request, tz: string): Promi
   }
 
   const row = (await repo.getItemRow(itemId))!;
-  return json({ type: "capture", item: (await repo.itemViews([row]))[0], question });
+  return json({ type: "capture", item: (await repo.itemViews([row]))[0], question, ai_error: aiError });
 }
 
 function toAnswerItems(views: Awaited<ReturnType<Repo["itemViews"]>>, tz: string): AnswerItem[] {
