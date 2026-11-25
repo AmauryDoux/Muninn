@@ -6,6 +6,7 @@ import { buildRecallQuery } from "../core/recall";
 import { firstWindow } from "../core/recurring";
 import { recurrenceToRule } from "../core/rrule";
 import { DISCLAIMERS, PARSER_VERSION, type CaptureOut, type ParseOutput, type RecallOut } from "../core/schema";
+import { fallbackRecall, looksLikeQuestion } from "../core/question";
 import { matchThing, thingTokens } from "../core/things";
 import { civilOf, civilToIso, resolveTimeRef } from "../core/time";
 import { logModelError } from "../lib/usage";
@@ -131,6 +132,12 @@ export async function handleCapture(repo: Repo, req: Request, tz: string, opts: 
   }
   if (out?.intent === "advice") {
     return json({ type: "answer", ...(await advise(repo, text, people, now, tz)) });
+  }
+  // The parser failed or gave nothing usable, and the note reads like a question: answer it from the open list
+  // rather than saving "What have I got to do today" as a to-do. Nothing is saved.
+  if (!opts.captureOnly && !out?.capture && looksLikeQuestion(text)) {
+    const ans = await recall(repo, text, fallbackRecall(text), people, now, tz);
+    return json({ type: "answer", ...ans, ai_error: ("ai_error" in ans && ans.ai_error) || aiError });
   }
 
   const cap: CaptureOut = out?.capture ?? {
