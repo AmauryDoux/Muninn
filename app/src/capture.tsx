@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, capture, type Because, type CaptureResult, type GapQuestion, type Item, type Person } from "./api";
 import { errText } from "./auth";
 import { localDate, when } from "./fmt";
@@ -34,6 +34,44 @@ export function CaptureBox({ people, onCaptured }: { people: Person[]; onCapture
   const [err, setErr] = useState("");
   const [source, setSource] = useState<"text" | "voice">("text");
   const rec = useRef<{ stop: () => void } | null>(null);
+  const panel = useRef<HTMLDivElement | null>(null);
+  const form = useRef<HTMLFormElement | null>(null);
+  const area = useRef<HTMLTextAreaElement | null>(null);
+  const close = useCallback(() => {
+    setResult(null);
+    setErr("");
+  }, []);
+  const open = !!(result || err);
+
+  // The result sheet sits just above the composer, whatever height the composer has grown to.
+  useEffect(() => {
+    const f = form.current;
+    if (!f || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => document.documentElement.style.setProperty("--composer-h", `${Math.round(f.getBoundingClientRect().height)}px`));
+    ro.observe(f);
+    return () => ro.disconnect();
+  }, []);
+
+  // Dismiss: a tap anywhere outside the sheet and the composer, or Escape. The tap still reaches what it was on.
+  useEffect(() => {
+    if (!open) return;
+    const down = (e: PointerEvent) => {
+      const t = e.target as Node | null;
+      if (!t || panel.current?.contains(t) || form.current?.contains(t)) return;
+      if ((t as Element).closest?.(".sheet, .sheet-backdrop, .modal, .toast")) return;
+      close();
+    };
+    const key = (e: KeyboardEvent) => e.key === "Escape" && close();
+    document.addEventListener("pointerdown", down, true);
+    addEventListener("keydown", key);
+    return () => {
+      document.removeEventListener("pointerdown", down, true);
+      removeEventListener("keydown", key);
+    };
+  }, [open, close]);
+
+  // Swipe down on the sheet to dismiss it (only from the top, so scrolling inside it still works).
+  const swipe = useRef<{ y: number; top: number } | null>(null);
 
   async function submit(t = text, src = source) {
     const v = t.trim();
@@ -45,6 +83,7 @@ export function CaptureBox({ people, onCaptured }: { people: Person[]; onCapture
       const r = await capture(v, src);
       setResult(r);
       setText("");
+      if (area.current) area.current.style.height = "";
       setSource("text");
       if (r.type === "capture") onCaptured();
     } catch (e) {
@@ -126,8 +165,23 @@ export function CaptureBox({ people, onCaptured }: { people: Person[]; onCapture
 
   return (
     <>
-      {(result || err) && (
-        <div className="composer-panel">
+      {open && (
+        <div
+          className="composer-panel"
+          ref={panel}
+          onTouchStart={(e) => (swipe.current = { y: e.touches[0].clientY, top: panel.current?.scrollTop ?? 0 })}
+          onTouchEnd={(e) => {
+            const s = swipe.current;
+            swipe.current = null;
+            if (s && s.top <= 0 && e.changedTouches[0].clientY - s.y > 60) close();
+          }}
+        >
+          <div className="panel-bar">
+            <span className="grabber" />
+            <button type="button" className="iconbtn" aria-label="Close" onClick={close}>
+              <Icon name="x" size={18} />
+            </button>
+          </div>
           {err && (
             <div className="card">
               <p className="error">{err}</p>
@@ -147,7 +201,7 @@ export function CaptureBox({ people, onCaptured }: { people: Person[]; onCapture
             </p>
           )}
           {result?.type === "capture" && (
-            <ConfirmCard key={result.item.id} item={result.item} question={result.question} people={people} onDone={() => setResult(null)} onChanged={onCaptured} />
+            <ConfirmCard key={result.item.id} item={result.item} question={result.question} people={people} onDone={close} onChanged={onCaptured} />
           )}
           {result?.type === "capture" && !!result.also?.length && (
             <div className="card">
@@ -169,11 +223,12 @@ export function CaptureBox({ people, onCaptured }: { people: Person[]; onCapture
             </p>
           )}
           {result?.type === "answer" && (
-            <Answer answer={result.answer} disclaimer={result.disclaimer ?? null} because={result.because ?? []} items={result.items} onClose={() => setResult(null)} />
+            <Answer answer={result.answer} disclaimer={result.disclaimer ?? null} because={result.because ?? []} items={result.items} onClose={close} />
           )}
         </div>
       )}
       <form
+        ref={form}
         className="composer"
         onSubmit={(e) => {
           e.preventDefault();
@@ -184,6 +239,7 @@ export function CaptureBox({ people, onCaptured }: { people: Person[]; onCapture
           <Icon name={listening ? "x" : "mic"} />
         </button>
         <textarea
+          ref={area}
           value={text}
           onChange={(e) => {
             setText(e.target.value);
@@ -214,9 +270,6 @@ function Answer({ answer, disclaimer, because, items, onClose }: { answer: strin
   const [why, setWhy] = useState(false);
   return (
     <div className="card answer">
-      <button className="iconbtn panel-close" aria-label="Close" onClick={onClose}>
-        <Icon name="x" size={18} />
-      </button>
       <p className="prewrap brief">{answer}</p>
       {disclaimer && <Disclaimer text={disclaimer} />}
       {because.length > 0 && (
@@ -258,6 +311,8 @@ function Answer({ answer, disclaimer, because, items, onClose }: { answer: strin
 type Field = "title" | "for" | "by" | "when" | "place" | null;
 
 /** The confirmation line: one chip per field, tap to fix. Saves itself after 5 seconds of no interaction. */
+export const AUTO_DISMISS_MS = 6000;
+
 export function ConfirmCard({
   item: initial,
   question,
@@ -277,11 +332,17 @@ export function ConfirmCard({
   const [answer, setAnswer] = useState("");
   const [err, setErr] = useState("");
 
+  // Goes away by itself after a few seconds, unless a chip is being edited or a question is waiting for an answer.
+  // (Before, any touch on the card stopped the timer for good, and the card could stay up forever.)
+  const doneRef = useRef(onDone);
   useEffect(() => {
-    if (touched) return;
-    const t = setTimeout(onDone, 5000);
+    doneRef.current = onDone;
+  }, [onDone]);
+  useEffect(() => {
+    if (editing || question || err) return;
+    const t = setTimeout(() => doneRef.current(), AUTO_DISMISS_MS);
     return () => clearTimeout(t);
-  }, [touched, onDone]);
+  }, [editing, question, err]);
 
   async function patch(body: Record<string, unknown>) {
     try {
@@ -320,7 +381,7 @@ export function ConfirmCard({
   );
 
   return (
-    <div className="card confirm gold" onPointerDown={() => setTouched(true)}>
+    <div className="card confirm gold">
       <p className="small muted">
         <Icon name="check" size={14} className="tone-ok" /> Saved
       </p>

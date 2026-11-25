@@ -179,7 +179,7 @@ export async function getBrief(repo: Repo, rs: ReminderSettings): Promise<Respon
     .prepare("SELECT id, subject_type, subject_id, key FROM facts WHERE active = 1 AND review_after IS NOT NULL AND review_after < ? LIMIT 1")
     .bind(now.toISOString())
     .first<{ id: string; subject_type: string; subject_id: string | null; key: string }>();
-  const text = await briefText(repo, civilToIso(today), g.today, g.overdue);
+  const text = await briefText(repo, civilToIso(today), g.today, g.overdue, rs.tz);
   let tips: Awaited<ReturnType<typeof currentTips>> = [];
   try {
     tips = await currentTips(repo, now, rs.tz);
