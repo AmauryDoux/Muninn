@@ -2,32 +2,37 @@ import { describe, expect, it } from "vitest";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { AdviceSchema, AnswerSchema, ParseSchema, TipWordingSchema } from "../worker/core/schema";
 import { z } from "zod";
-import { GRAMMAR_BUDGET, grammarSize, SCHEMA_LIMITS, schemaComplexity, toParseOutput, WireParseSchema } from "../worker/core/wire";
+import { GRAMMAR_BUDGET, grammarSize, PARSE_SCHEMAS, SCHEMA_LIMITS, schemaComplexity, toParseOutput, WireCaptureParseSchema } from "../worker/core/wire";
 
 const jsonOf = (s: unknown) => (zodOutputFormat(s as never) as unknown as { schema: unknown }).schema;
 
 describe("structured-output limits", () => {
   // The API rejects a request whose schema has >16 union params or >24 optional params ("Schema is too complex").
   // Every schema we send must fit, or every call silently falls back.
-  for (const [name, s] of [["parse", WireParseSchema], ["answer", AnswerSchema], ["advice", AdviceSchema], ["tips", TipWordingSchema]] as const) {
+  for (const [name, s] of [["parse_capture", PARSE_SCHEMAS.parse_capture], ["parse_recall", PARSE_SCHEMAS.parse_recall], ["answer", AnswerSchema], ["advice", AdviceSchema], ["tips", TipWordingSchema]] as const) {
     it(`${name} fits`, () => {
       const c = schemaComplexity(jsonOf(s));
       expect(c.unions).toBeLessThanOrEqual(SCHEMA_LIMITS.unions);
       expect(c.optional).toBeLessThanOrEqual(SCHEMA_LIMITS.optional);
     });
   }
-  // A third limit, undocumented as a number: "The compiled grammar is too large" (HTTP 400). Splitting notes added
-  // per-item people and times and pushed the parse schema over it; every capture failed in production. The schema
-  // before that change (4,444 chars with $refs expanded, 83 enum values, 15 objects) worked; the failing one was
-  // 5,445 / 96 / 19. These budgets stay below the known-good schema so a new field has to make room first.
-  it("parse stays below the compiled-grammar size that is known to work", () => {
-    const g = grammarSize(jsonOf(WireParseSchema));
-    expect(g.chars).toBeLessThanOrEqual(GRAMMAR_BUDGET.chars);
-    expect(g.enumValues).toBeLessThanOrEqual(GRAMMAR_BUDGET.enumValues);
-    expect(g.objects).toBeLessThanOrEqual(GRAMMAR_BUDGET.objects);
-  });
+  // A third limit, not published as a number: "The compiled grammar is too large" (HTTP 400), which made every
+  // capture fail twice in production. Data points with this measure ($refs expanded, descriptions dropped):
+  //   worked:  4,444 chars / 83 enum values / 15 objects (before split notes); about 4,000 / 59 / 13 (with "in 5 minutes")
+  //   failed:  5,445 / 96 / 19 (split notes);  4,077 / 59 / 13 (open-item updates)
+  // So the measure is only a rough guide: the second failure was smaller than a schema that worked. The parse is now
+  // two schemas (capture, and recall only for questions), each far below every data point, and `npm run check:ai`
+  // sends the real schemas to the API before each deploy.
+  for (const [name, s] of Object.entries(PARSE_SCHEMAS)) {
+    it(`${name} stays well below every size seen to fail`, () => {
+      const g = grammarSize(jsonOf(s));
+      expect(g.chars).toBeLessThanOrEqual(GRAMMAR_BUDGET.chars);
+      expect(g.enumValues).toBeLessThanOrEqual(GRAMMAR_BUDGET.enumValues);
+      expect(g.objects).toBeLessThanOrEqual(GRAMMAR_BUDGET.objects);
+    });
+  }
   it("the grammar measure flags the schema that failed in production", () => {
-    const failing = z.object({ ...WireParseSchema.shape, extra: z.array(z.object({ a: z.object({ b: z.string(), c: z.string() }), d: z.enum(["x", "y", "z"]), e: z.object({ f: z.enum(["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15"]) }) })) });
+    const failing = z.object({ ...WireCaptureParseSchema.shape, recall: z.string(), extra: z.array(z.object({ a: z.object({ b: z.string(), c: z.string() }), d: z.enum(["x", "y", "z"]), e: z.object({ f: z.enum(["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15"]) }) })) });
     const g = grammarSize(jsonOf(failing));
     expect(g.chars > GRAMMAR_BUDGET.chars || g.enumValues > GRAMMAR_BUDGET.enumValues || g.objects > GRAMMAR_BUDGET.objects).toBe(true);
   });

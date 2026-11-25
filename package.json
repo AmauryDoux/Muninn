@@ -12,6 +12,8 @@
     "test": "vitest run",
     "db:migrate:local": "wrangler d1 migrations apply muninn --local",
     "db:migrate:remote": "wrangler d1 migrations apply muninn --remote",
+    "check:ai": "node scripts/check-ai.mjs",
+    "predeploy": "npm run check:ai",
     "deploy": "npm run build && wrangler deploy",
     "gen:secrets": "node scripts/gen-secrets.mjs"
   },
@@ -30,6 +32,7 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.3.0",
+    "esbuild": "^0.28.2",
     "http_ece": "^1.2.1",
     "oxlint": "^1.95.0",
     "typescript": "^7.0.2",
