@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api, flushQueue, queuedCount, setAuthHandlers, type Item, type Person, type Tip } from "./api";
 import { Login, Reauth, Setup, errText, registerPasskey } from "./auth";
 import { CaptureBox } from "./capture";
+import { setBadge } from "./badge";
 import { setTz } from "./fmt";
 import { Icon } from "./icons";
 import { DoneList, ItemDetail, OpenList } from "./items";
@@ -9,6 +10,9 @@ import { Know } from "./know";
 import { CategoryScreen, Digest, LifeHome, ThingDetail, ThingsScreen } from "./life";
 import { Settings } from "./settings";
 import { Tips } from "./tips";
+import { UndoToast } from "./undo";
+import { ReviewScreen } from "./review";
+import { TzBanner, checkTz } from "./tzbanner";
 
 interface Status {
   setup_done: boolean;
@@ -88,17 +92,27 @@ function greeting(): string {
 
 function Main({ hasPasskey, onSignedOut, onPasskeyAdded }: { hasPasskey: boolean; onSignedOut: () => void; onPasskeyAdded: () => void }) {
   const initial = new URLSearchParams(location.search).get("view");
-  const [tab, setTab] = useState<Tab>(initial === "upcoming" ? "upcoming" : initial === "life" ? "life" : "home");
+  const [tab, setTab] = useState<Tab>(initial === "upcoming" ? "upcoming" : initial === "life" ? "life" : initial === "settings" ? "settings" : "home");
   const [items, setItems] = useState<Item[]>([]);
   const [people, setPeople] = useState<Person[]>([]);
   const [brief, setBrief] = useState<Brief | null>(null);
   const [queued, setQueued] = useState(queuedCount());
+  const [tzOffer, setTzOffer] = useState<{ zone: string; saved: string } | null>(null);
   const hash = useHash();
   const loaded = useRef(false);
 
   const loadItems = useCallback(() => api<{ items: Item[] }>("/api/items?view=open").then((r) => setItems(r.items)), []);
   const loadPeople = useCallback(() => api<{ people: Person[] }>("/api/people").then((r) => setPeople(r.people)), []);
-  const loadBrief = useCallback(() => api<Brief>("/api/brief").then(setBrief).catch(() => {}), []);
+  const loadBrief = useCallback(
+    () =>
+      api<Brief>("/api/brief")
+        .then((b) => {
+          setBrief(b);
+          setBadge(b.today.length + b.overdue.length);
+        })
+        .catch(() => {}),
+    [],
+  );
 
   // A typed name in a form may have created a person: reload the list everywhere.
   useEffect(() => {
@@ -110,11 +124,16 @@ function Main({ hasPasskey, onSignedOut, onPasskeyAdded }: { hasPasskey: boolean
   useEffect(() => {
     if (loaded.current) return;
     loaded.current = true;
-    api<{ settings: Record<string, string | null> }>("/api/settings").then((r) => setTz(r.settings.tz));
+    api<{ settings: Record<string, string | null> }>("/api/settings").then(async (r) => {
+      setTz(r.settings.tz);
+      const zone = await checkTz(r.settings);
+      if (zone && r.settings.tz) setTzOffer({ zone, saved: r.settings.tz });
+    });
     loadItems();
     loadPeople();
     loadBrief();
     if (initial === "digest") location.hash = "#/digest";
+    if (initial === "review") location.hash = "#/review";
     const flush = () =>
       flushQueue().then((n) => {
         setQueued(queuedCount());
@@ -132,7 +151,7 @@ function Main({ hasPasskey, onSignedOut, onPasskeyAdded }: { hasPasskey: boolean
   }, [loadItems, loadPeople, loadBrief, initial]);
 
   const route = hash.match(/^#\/(item|life|thing)\/([0-9A-Za-z_]{2,40})$/);
-  const sub = route ? { kind: route[1], id: route[2] } : hash === "#/things" ? { kind: "things", id: "" } : hash === "#/digest" ? { kind: "digest", id: "" } : null;
+  const sub = route ? { kind: route[1], id: route[2] } : hash === "#/things" ? { kind: "things", id: "" } : hash === "#/digest" ? { kind: "digest", id: "" } : hash === "#/review" ? { kind: "review", id: "" } : null;
   const back = () => {
     if (history.length > 1) history.back();
     else location.hash = "";
@@ -171,11 +190,24 @@ function Main({ hasPasskey, onSignedOut, onPasskeyAdded }: { hasPasskey: boolean
           <ThingsScreen onBack={back} />
         ) : sub?.kind === "digest" ? (
           <Digest onBack={back} />
+        ) : sub?.kind === "review" ? (
+          <ReviewScreen onBack={back} />
         ) : (
           <>
             {tab === "home" && (
               <>
                 {!hasPasskey && <PasskeyNudge onAdded={onPasskeyAdded} />}
+                {tzOffer && (
+                  <TzBanner
+                    zone={tzOffer.zone}
+                    saved={tzOffer.saved}
+                    onDone={() => {
+                      setTzOffer(null);
+                      loadItems();
+                      loadBrief();
+                    }}
+                  />
+                )}
                 {brief && (
                   <section className="card">
                     <p className="brief">{brief.summary}</p>
@@ -218,6 +250,7 @@ function Main({ hasPasskey, onSignedOut, onPasskeyAdded }: { hasPasskey: boolean
           }}
         />
       )}
+      <UndoToast />
       <nav className="tabbar" aria-label="Sections">
         {TABS.map(([t, label, icon]) => (
           <button

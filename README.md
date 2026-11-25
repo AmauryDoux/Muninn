@@ -65,9 +65,35 @@ npm run deploy
 
 ### Optional
 - **Weather-aware seasonal tips**: Settings → Life → Use my location (rounded to about 1 km, sent to Open-Meteo once a day).
-- **Vectorize** (if your plan includes it for free): `npx wrangler vectorize create muninn-captures-v1 --dimensions=768 --metric=cosine`, then uncomment the binding in `wrangler.jsonc`. Without it, search runs over vectors stored in D1 (fine for the first few thousand notes).
-- **Weekly encrypted backup to R2**: `npx wrangler r2 bucket create muninn-backups`, then uncomment the binding.
-- **Deploy from GitHub Actions**: add secrets `CLOUDFLARE_API_TOKEN` (scoped to Workers Scripts:Edit and D1:Edit on this account) and `CLOUDFLARE_ACCOUNT_ID`, and the variable `DEPLOY_ENABLED=true`.
+- **Vectorize** (free tier covers a personal install): `npx wrangler vectorize create muninn-captures-v1 --dimensions=768 --metric=cosine`, then uncomment the binding in `wrangler.jsonc`. The cron copies existing vectors into it, 100 every 5 minutes. Without it, search scans up to 3,000 vectors in D1, which gets close to the free plan's CPU limit as notes grow.
+- **Weekly backup and photos (R2)**: `npx wrangler r2 bucket create muninn-backups`, then uncomment the `r2_buckets` binding. The same bucket holds the Sunday backup (`backup-*.json.enc`) and receipt photos (`files/`), all sealed with `DATA_KEY`.
+- **Deploy from GitHub Actions** (merge = deploy, handy from the phone): secrets `CLOUDFLARE_API_TOKEN` (Workers Scripts:Edit and D1:Edit on this account) and `CLOUDFLARE_ACCOUNT_ID`; variables `DEPLOY_ENABLED=true`, `D1_DATABASE_ID`, `VAPID_PUBLIC_KEY`, optionally `VAPID_SUBJECT`, `ENABLE_VECTORIZE=true`, `ENABLE_BACKUPS=true`. The job fills `wrangler.jsonc` from those (it refuses to deploy without the push key), applies migrations, then deploys.
+
+## Keep `DATA_KEY` safe
+Every note, name and backup is encrypted with it. Keep a copy in your password manager. Without it, nothing can be restored.
+
+## Restore a backup
+Into a fresh database for an exact copy (`npx wrangler d1 create muninn`, put the new id in `wrangler.jsonc`, `npm run db:migrate:remote`), or over the current one (rows in the backup replace the same rows; nothing else is deleted). D1 Time Travel also restores the last days without any of this.
+```bash
+npx wrangler r2 object get muninn-backups/backup-2026-11-29.json.enc --remote --file backup.enc
+DATA_KEY=... node scripts/restore.mjs backup.enc backup-2026-11-29.json.enc > restore.sql
+npx wrangler d1 execute muninn --remote --file restore.sql
+rm backup.enc restore.sql   # restore.sql holds encrypted rows and your password verifier
+```
+Search vectors and push devices are not in the backup: the cron re-embeds notes within the hour, and you turn reminders on again in Settings. Backups made before snapshots existed are decrypted exports: `--json` prints them.
+
+## Shortcuts, Calendar and arrival nudges
+Settings → "Siri, Action button, Share and Calendar" makes narrow keys, each shown once and stored only as a hash:
+- **Capture key**: an iOS Shortcut posts a note to `/api/shortcut/capture`. It can only add; questions are saved as notes, never answered.
+- **Calendar link**: a `webcal://` subscription of dated items (titles and dates only). The link is the key: treat it like a password.
+- **Arrival key**: a "When I arrive" automation posts the kind of place to `/api/shortcut/arrive`; your devices get a push naming what's there, the caller only a count.
+Revoke any key in the same place.
+
+## Sign-in hardening
+- Settings → Sign-in lists signed-in devices with their own sign-out, and every new sign-in pushes a notice to your devices.
+- With a passkey added, turn off "Allow password sign-in": the fast password verifier then stops being an attack path. If you lose every passkey: `npx wrangler d1 execute muninn --remote --command "DELETE FROM settings WHERE key = 'password_login'"`.
+- Optional extra layer: Cloudflare Access (Zero Trust, free for one user) in front of the hostname, with a bypass rule for `/api/shortcut/*` and `/api/calendar/*` (they carry their own keys). Test it from the Home Screen app before relying on it: Access sessions in an installed iOS web app can expire and need a sign-in in Safari. [Not yet tested here.]
+- Set a monthly spend limit in the Anthropic console too; Settings → Health has Muninn's own AI budget.
 
 ## Costs
 

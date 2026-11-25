@@ -1,5 +1,5 @@
 import { DEFAULT_REMINDER_SETTINGS } from "../core/reminders";
-import { transcribe } from "../ai";
+import { DEFAULT_AI_BUDGET_USD, monthSpend, transcribe } from "../ai";
 import { summarize, type UsageRow } from "../core/costs";
 import { groupItems } from "../core/group";
 import type { ReminderSettings } from "../core/reminders";
@@ -47,8 +47,20 @@ export async function deleteDevice(repo: Repo, id: string): Promise<Response> {
   return json({ ok: true });
 }
 
-/** Push to every device now. Payloads never carry item text (Apple and Google can see them). */
-export async function pushAll(repo: Repo, payload: { title: string; body: string; url: string; tag: string }): Promise<number> {
+export interface PushPayload {
+  title: string;
+  body: string;
+  url: string;
+  tag: string;
+  /** Open items for today plus overdue, for the Home Screen icon badge. */
+  badge?: number;
+}
+
+/**
+ * Push to every device now. Payloads are end-to-end encrypted to the device (RFC 8291): Apple and Google relay them
+ * but cannot read them. Item titles are included only when the user allows it (`push_titles`).
+ */
+export async function pushAll(repo: Repo, payload: PushPayload): Promise<number> {
   const env = repo.env;
   if (!env.VAPID_PUBLIC_KEY || !env.VAPID_PRIVATE_KEY) {
     console.warn("VAPID keys not configured; push skipped");
@@ -96,6 +108,9 @@ export async function getSettings(repo: Repo): Promise<Response> {
     currency: "USD",
     tips_enabled: "1",
     tips_ai: "0",
+    push_titles: "1",
+    ai_budget_usd: String(DEFAULT_AI_BUDGET_USD),
+    tz_follow: "0",
   };
   for (const k of USER_SETTING_KEYS) out[k] = m.get(k) ?? defaults[k] ?? null;
   return json({ settings: out, vapid_public_key: repo.env.VAPID_PUBLIC_KEY || null, vectorize: !!repo.env.VECTORIZE });
@@ -123,7 +138,10 @@ export async function putSettings(repo: Repo, req: Request): Promise<Response> {
       const lim = k === "home_lat" ? 90 : 180;
       if (s === "" || !Number.isFinite(n) || Math.abs(n) > lim) throw new HttpError(400, `bad_${k}`);
       val = n.toFixed(2);
-    } else if (k === "tips_enabled" || k === "tips_ai") {
+    } else if (k === "ai_budget_usd") {
+      const n = Number(s);
+      if (!/^\d+(\.\d{1,2})?$/.test(s) || n < 0.1 || n > 100) throw new HttpError(400, "bad_ai_budget_usd", "Use an amount from 0.10 to 100.");
+    } else if (k === "tips_enabled" || k === "tips_ai" || k === "push_titles" || k === "tz_follow") {
       if (s !== "0" && s !== "1") throw new HttpError(400, `bad_${k}`);
     } else if (!HHMM.test(s)) throw new HttpError(400, `bad_${k}`);
     await setSetting(repo.db, k, val);
@@ -204,6 +222,41 @@ export async function getUsage(repo: Repo, url: URL): Promise<Response> {
     ...summarize(rows),
     last_error: err ? { at: lastErr!.at, job: err.job, status: err.status, message: err.message } : null,
     last_success_at: lastOk?.at ?? null,
+  });
+}
+
+// ---- health ----
+
+/**
+ * What the phone needs to tell whether Muninn is working without `wrangler tail`: the cron's last run, push delivery,
+ * AI spend against the budget, search coverage and the last backup.
+ */
+export async function getHealth(repo: Repo): Promise<Response> {
+  const db = repo.db;
+  const m = await getSettingsMap(db);
+  const week = new Date(Date.now() - 7 * 86400_000).toISOString();
+  const [lastPush, pushFailed, aiErrors, devices, missingVectors] = await Promise.all([
+    db.prepare("SELECT MAX(last_ok_at) AS at FROM push_subscriptions").first<{ at: string | null }>(),
+    db.prepare("SELECT COUNT(*) AS n FROM events WHERE type = 'push_failed' AND at >= ?").bind(week).first<{ n: number }>(),
+    db.prepare("SELECT COUNT(*) AS n FROM events WHERE type = 'model_error' AND at >= ?").bind(week).first<{ n: number }>(),
+    db.prepare("SELECT COUNT(*) AS n FROM push_subscriptions").first<{ n: number }>(),
+    db.prepare("SELECT COUNT(*) AS n FROM items i WHERE NOT EXISTS (SELECT 1 FROM capture_vectors v WHERE v.item_id = i.id)").first<{ n: number }>(),
+  ]);
+  return json({
+    cron_last_run: m.get("cron_last_run") ?? null,
+    push: {
+      configured: !!(repo.env.VAPID_PUBLIC_KEY && repo.env.VAPID_PRIVATE_KEY),
+      devices: devices?.n ?? 0,
+      last_delivered_at: lastPush?.at ?? null,
+      failed_7d: pushFailed?.n ?? 0,
+    },
+    ai: {
+      spent_month_usd: await monthSpend(db),
+      budget_usd: Number(m.get("ai_budget_usd") ?? DEFAULT_AI_BUDGET_USD),
+      errors_7d: aiErrors?.n ?? 0,
+    },
+    search: { vectorize: !!repo.env.VECTORIZE, items_without_vector: missingVectors?.n ?? 0 },
+    backup: { configured: !!repo.env.BACKUPS, last_at: m.get("backup_last") ?? null },
   });
 }
 

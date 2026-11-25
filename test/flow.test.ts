@@ -186,3 +186,39 @@ describe("notes sent late from the offline queue", () => {
     expect(captureTime("2026-01-01T00:00:00Z", now).toISOString()).toBe("2026-11-10T12:00:00.000Z"); // 14 days max
   });
 });
+
+describe("AI budget", () => {
+  it("past the monthly budget, a note is still saved, without calling the model", async () => {
+    await repo.db.prepare("INSERT INTO settings (key, value) VALUES ('ai_budget_usd', '0.10')").run();
+    await repo.db
+      .prepare("INSERT INTO events (id, at, type, payload_json) VALUES ('u1', ?, 'model_usage', ?)")
+      .bind(new Date().toISOString(), JSON.stringify({ job: "parse", usd: 0.11 }))
+      .run();
+    const b = await send("buy milk");
+    expect(calls).toHaveLength(0);
+    expect(b.type).toBe("capture");
+    expect(b.item.title).toBe("buy milk");
+    expect(b.ai_error).toMatch(/budget/);
+  });
+});
+
+describe("several to-dos in one note", () => {
+  it("each becomes its own item, with its own date and person", async () => {
+    reply = () =>
+      capture({
+        kind: "task",
+        title: "Buy milk",
+        also: [
+          { kind: "task", title: "Call mom", for_person: { mention: "mom", relation: "mother" }, requested_by: none, when: { ...noTime, type: "relative", unit: "day", offset: 1 }, place_hint: "" },
+          { kind: "task", title: "Book the dentist", for_person: none, requested_by: none, when: noTime, place_hint: "" },
+        ],
+      });
+    const b = await send("buy milk, call mom tomorrow and book the dentist");
+    expect(b.item.title).toBe("Buy milk");
+    expect(b.also.map((i: { title: string }) => i.title)).toEqual(["Call mom", "Book the dentist"]);
+    expect(b.also[0].for_person.name).toBe("Mom");
+    expect(b.also[0].window_start).toBeTruthy();
+    const n = await repo.db.prepare("SELECT COUNT(*) AS n FROM items").first<{ n: number }>();
+    expect(n!.n).toBe(3);
+  });
+});

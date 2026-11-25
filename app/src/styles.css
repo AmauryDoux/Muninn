@@ -392,3 +392,45 @@ a.tile, a.stat { color: var(--text); }
 .person-input { display: flex; flex-direction: column; gap: 8px; }
 .person-input .chips.suggest { display: flex; flex-wrap: wrap; gap: 6px; }
 .person-input p { margin: 0; }
+/* Shortcut key: long, must wrap and be selectable. */
+code.token {
+  display: block;
+  word-break: break-all;
+  user-select: all;
+  -webkit-user-select: all;
+  padding: 8px 10px;
+  margin: 8px 0;
+  border-radius: 10px;
+  background: rgba(127, 127, 127, 0.15);
+  font-size: 13px;
+}
+ol.steps {
+  padding-left: 20px;
+  margin-top: 10px;
+  line-height: 1.5;
+}
+
+/* Undo toast: above the composer and tab bar, in thumb reach. */
+.toast {
+  position: fixed; z-index: 40; left: 16px; right: 16px; max-width: 528px; margin: 0 auto;
+  bottom: calc(var(--safe-bottom) + var(--tabbar-h) + 84px);
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 10px 10px 10px 16px; border-radius: 18px;
+  background: var(--glass); border: 1px solid var(--stroke-2); box-shadow: var(--shadow);
+  -webkit-backdrop-filter: blur(24px) saturate(180%); backdrop-filter: blur(24px) saturate(180%);
+  font-weight: 600;
+}
+
+/* Photos and receipts on an item. */
+.thumbs { display: flex; flex-wrap: wrap; gap: 10px; }
+.thumbwrap { position: relative; }
+.thumb {
+  width: 76px; height: 76px; border-radius: 14px; overflow: hidden; display: grid; place-items: center;
+  background: rgba(127, 127, 127, 0.15); border: 1px solid var(--stroke-2); color: inherit; font-weight: 700; font-size: 13px;
+}
+.thumb img { width: 100%; height: 100%; object-fit: cover; }
+.thumb.add { cursor: pointer; }
+.thumbdel {
+  position: absolute; top: -6px; right: -6px; width: 26px; height: 26px; border-radius: 13px; padding: 0;
+  display: grid; place-items: center; background: var(--glass); border: 1px solid var(--stroke-2); color: inherit;
+}

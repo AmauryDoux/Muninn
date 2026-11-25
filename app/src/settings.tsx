@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { api } from "./api";
 import { PasswordHint, errText, registerPasskey } from "./auth";
 import { ago, setTz } from "./fmt";
+import { Health } from "./health";
+import { Sessions } from "./sessions";
 import { Icon } from "./icons";
 
 interface SettingsResp {
@@ -123,11 +125,27 @@ export function Settings({ onSignedOut }: { onSignedOut: () => void }) {
             </li>
           ))}
         </ul>
+        <Toggle
+          on={form.push_titles !== "0"}
+          label="Show what is due in notifications"
+          hint="Notifications are encrypted to your phone; Apple can't read them. To hide them on the lock screen: iPhone Settings, Notifications, Show Previews, When Unlocked."
+          onToggle={() => {
+            const v = form.push_titles === "0" ? "1" : "0";
+            setForm({ ...form, push_titles: v });
+            api("/api/settings", { method: "PUT", body: { push_titles: v } }).catch((e) => setMsg(errText(e)));
+          }}
+        />
       </section>
 
       <form className="card" onSubmit={save}>
         <h3>Preferences</h3>
         {field("tz", "Time zone (IANA, e.g. Europe/Paris)")}
+        <Toggle
+          on={form.tz_follow === "1"}
+          label="Follow this phone's time zone"
+          hint="When you travel, reminders move to local time the next time you open Muninn."
+          onToggle={() => setForm({ ...form, tz_follow: form.tz_follow === "1" ? "0" : "1" })}
+        />
         <div className="row">
           {field("quiet_start", "Quiet from", "time")}
           {field("quiet_end", "Quiet until", "time")}
@@ -145,6 +163,8 @@ export function Settings({ onSignedOut }: { onSignedOut: () => void }) {
 
       <LifeSettings settings={s.settings} onMsg={setMsg} />
 
+      <Shortcuts onMsg={setMsg} />
+
       <section className="card">
         <h3>Sign-in</h3>
         <ul className="plain">
@@ -159,6 +179,7 @@ export function Settings({ onSignedOut }: { onSignedOut: () => void }) {
         </ul>
         <button className="btn" onClick={addPasskey}>Add a passkey</button>
         <ChangePassword onMsg={setMsg} />
+        <Sessions hasPasskey={passkeys.length > 0} onMsg={setMsg} />
         <div className="row">
           <button className="btn" onClick={() => api("/api/auth/logout", { method: "POST", body: {} }).then(onSignedOut)}>Sign out</button>
           <button className="btn danger" onClick={() => confirm("Sign out every device?") && api("/api/auth/logout-all", { method: "POST", body: {} }).then(onSignedOut)}>
@@ -166,6 +187,8 @@ export function Settings({ onSignedOut }: { onSignedOut: () => void }) {
           </button>
         </div>
       </section>
+
+      <Health />
 
       <Usage />
 
@@ -372,6 +395,145 @@ function Usage() {
           </table>
         </>
       )}
+    </section>
+  );
+}
+
+interface TokenRow {
+  id: string;
+  label: string;
+  created_at: string;
+  last_used_at: string | null;
+}
+
+/** Capture-only tokens for an iOS Shortcut: Action button, "Hey Siri, tell Muninn", or the Share sheet. */
+function Shortcuts({ onMsg }: { onMsg: (m: string) => void }) {
+  const [tokens, setTokens] = useState<TokenRow[]>([]);
+  const [fresh, setFresh] = useState<string | null>(null);
+  const load = () => api<{ tokens: TokenRow[] }>("/api/tokens").then((r) => setTokens(r.tokens));
+  useEffect(() => {
+    load().catch(() => {});
+  }, []);
+  const url = `${location.origin}/api/shortcut/capture`;
+  async function create() {
+    try {
+      const r = await api<{ token: string }>("/api/tokens", { body: { label: "iPhone Shortcut" } });
+      setFresh(r.token);
+      load();
+    } catch (e) {
+      onMsg(errText(e));
+    }
+  }
+  const [calLink, setCalLink] = useState<string | null>(null);
+  const [nudgeKey, setNudgeKey] = useState<string | null>(null);
+  async function createNudge() {
+    try {
+      const r = await api<{ token: string }>("/api/tokens", { body: { scope: "nudge", label: "Arrival" } });
+      setNudgeKey(r.token);
+      load();
+    } catch (e) {
+      onMsg(errText(e));
+    }
+  }
+  async function createCalendar() {
+    try {
+      const r = await api<{ token: string }>("/api/tokens", { body: { scope: "calendar", label: "Calendar" } });
+      setCalLink(`webcal://${location.host}/api/calendar/${r.token}.ics`);
+      load();
+    } catch (e) {
+      onMsg(errText(e));
+    }
+  }
+  const copy = (t: string) => navigator.clipboard?.writeText(t).then(() => onMsg("Copied."), () => onMsg("Copy failed; select the text instead."));
+  return (
+    <section className="card">
+      <h3>Siri, Action button, Share and Calendar</h3>
+      <p className="muted small">
+        A Shortcut can send a note to Muninn without opening the app. Its key can only add notes: it cannot read, search or change anything.
+      </p>
+      {fresh ? (
+        <div className="notice">
+          <p className="small">
+            Copy this key now. It is shown only once.
+          </p>
+          <code className="token">{fresh}</code>
+          <div className="row">
+            <button className="btn small" onClick={() => copy(fresh)}>Copy key</button>
+            <button className="btn small" onClick={() => copy(url)}>Copy address</button>
+            <button className="btn ghost small" onClick={() => setFresh(null)}>Done</button>
+          </div>
+          <ol className="small steps">
+            <li>In Shortcuts, make a new shortcut named "Tell Muninn".</li>
+            <li>Add "Dictate Text" (or "Receive input from Share Sheet" for sharing text).</li>
+            <li>
+              Add "Get Contents of URL": the address above, Method POST, Header <code>Authorization</code> = <code>Bearer</code> + space + the key,
+              Request Body "File" set to the dictated text.
+            </li>
+            <li>Add "Get Dictionary Value" for key <code>say</code>, then "Show Notification" (or "Speak Text").</li>
+            <li>Settings → Action Button → Shortcut → Tell Muninn. Siri works with "Hey Siri, Tell Muninn".</li>
+          </ol>
+        </div>
+      ) : (
+        <button className="btn" onClick={create}>
+          Create a Shortcut key
+        </button>
+      )}
+      <hr />
+      <p className="small">Calendar: see dated items in the iPhone Calendar app.</p>
+      <p className="muted tiny">
+        Read-only, titles and dates only. The link is the key, so treat it like a password. If your iPhone syncs subscriptions through iCloud,
+        Apple's servers fetch the titles. Revoke it below any time.
+      </p>
+      {calLink ? (
+        <div className="notice">
+          <code className="token">{calLink}</code>
+          <div className="row">
+            <a className="btn primary small" href={calLink}>
+              Subscribe
+            </a>
+            <button className="btn small" onClick={() => copy(calLink)}>Copy link</button>
+            <button className="btn ghost small" onClick={() => setCalLink(null)}>Done</button>
+          </div>
+        </div>
+      ) : (
+        <button className="btn" onClick={createCalendar}>
+          Add to Calendar
+        </button>
+      )}
+      <hr />
+      <p className="small">Arrival: "you're at the pharmacy, pick up the prescription".</p>
+      {nudgeKey ? (
+        <div className="notice">
+          <p className="small">Copy this key now. It is shown only once. It can only send a notification to your own devices.</p>
+          <code className="token">{nudgeKey}</code>
+          <div className="row">
+            <button className="btn small" onClick={() => copy(nudgeKey)}>Copy key</button>
+            <button className="btn small" onClick={() => copy(`${location.origin}/api/shortcut/arrive`)}>Copy address</button>
+            <button className="btn ghost small" onClick={() => setNudgeKey(null)}>Done</button>
+          </div>
+          <ol className="small steps">
+            <li>Shortcuts → Automation → New → Arrive, pick the store, Run Immediately.</li>
+            <li>
+              Add "Get Contents of URL": the address above, Method POST, Header <code>Authorization</code> = <code>Bearer</code> + space + the key,
+              Request Body "File" set to the kind of place, e.g. <code>pharmacy</code> (the same word Muninn shows on the item).
+            </li>
+          </ol>
+        </div>
+      ) : (
+        <button className="btn" onClick={createNudge}>
+          Create an arrival key
+        </button>
+      )}
+      <ul className="plain">
+        {tokens.map((t) => (
+          <li key={t.id}>
+            {t.label} <span className="muted small">made {ago(t.created_at)}{t.last_used_at ? `, used ${ago(t.last_used_at)}` : ", never used"}</span>{" "}
+            <button className="btn ghost small danger" onClick={() => api(`/api/tokens/${t.id}`, { method: "DELETE" }).then(load).catch((e) => onMsg(errText(e)))}>
+              Revoke
+            </button>
+          </li>
+        ))}
+      </ul>
     </section>
   );
 }

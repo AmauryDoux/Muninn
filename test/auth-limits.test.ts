@@ -93,3 +93,33 @@ describe("signed challenge cookie", () => {
     expect((await call("/api/auth/passkey/login/verify", "203.0.113.7", { id: "x" }, tampered))!.status).toBe(400);
   });
 });
+
+describe("sessions and passkey-only", () => {
+  async function signedIn() {
+    const { createSession } = await import("../worker/auth");
+    const ua = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1";
+    const cookie = (await createSession(env, new Request("https://m.test/", { headers: { "User-Agent": ua } }))).split(";")[0];
+    await createSession(env, new Request("https://m.test/", { headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0) Chrome/130.0 Safari/537.36" } }));
+    return cookie;
+  }
+  const get = (path: string, cookie: string) =>
+    handleAuth(env, new Request(`https://m.test${path}`, { headers: { Cookie: cookie } }), path, cipher);
+
+  it("lists sessions with device names and marks this one", async () => {
+    const cookie = await signedIn();
+    const r = (await (await get("/api/auth/sessions", cookie))!.json()) as { sessions: { device: string; current: boolean }[] };
+    expect(r.sessions).toHaveLength(2);
+    expect(r.sessions.find((s) => s.current)!.device).toBe("iPhone, Safari");
+    expect(r.sessions.find((s) => !s.current)!.device).toBe("Windows, Chrome");
+  });
+
+  it("password sign-in can be turned off only with a passkey, and then refuses passwords", async () => {
+    const cookie = await signedIn();
+    await env.DB.prepare("UPDATE sessions SET reauth_at = ?").bind(new Date().toISOString()).run();
+    const off = (c = cookie) => call("/api/auth/password-login", "203.0.113.7", { enabled: false }, c);
+    expect((await off())!.status).toBe(409);
+    await env.DB.prepare("INSERT INTO passkeys (id, public_key, counter, label, created_at) VALUES ('pk', 'x', 0, 'iPhone', 'x')").run();
+    expect((await off())!.status).toBe(200);
+    expect((await call("/api/auth/login", "203.0.113.8", { username: "me", password: "Correct-Horse-9" }))!.status).toBe(403);
+  });
+});

@@ -1,0 +1,176 @@
+// iOS Shortcut capture: a capture-only bearer token adds notes and can never read anything back.
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { Env } from "../worker/env";
+import { Cipher } from "../worker/lib/crypto";
+import { setSetting } from "../worker/lib/settings";
+import { Repo } from "../worker/repo";
+import { makeD1 } from "./d1-shim";
+
+let intent: "capture" | "recall" = "capture";
+vi.mock("@anthropic-ai/sdk", () => {
+  class FakeAnthropic {
+    static APIError = Error;
+    messages = {
+      parse: async () => ({
+        stop_reason: "end_turn",
+        usage: { input_tokens: 1, output_tokens: 1 },
+        parsed_output:
+          intent === "recall"
+            ? {
+                intent: "recall",
+                capture: null,
+                recall: { mode: "semantic", topic: "secrets", requested_by: { mention: "", relation: "" }, for_person: { mention: "", relation: "" }, created: { type: "none", date: "", end_date: "", unit: "none", offset: 0, weekday: -1, time: "" }, scheduled: { type: "none", date: "", end_date: "", unit: "none", offset: 0, weekday: -1, time: "" }, status: "any", kind: "any", subtype: "any" },
+              }
+            : {
+                intent: "capture",
+                recall: null,
+                capture: {
+                  kind: "task", title: "Call mom", details: "", for_person: { mention: "", relation: "" }, requested_by: { mention: "", relation: "" },
+                  when: { type: "none", date: "", end_date: "", unit: "none", offset: 0, weekday: -1, time: "" }, place_hint: "", confidence: 0.9, subtype: "none", attrs: [],
+                  thing_name: "", thing_kind: "", repeat: "none", repeat_interval: 1, repeat_months: [], repeat_weekdays: [], facts: [], missing: [],
+                },
+              },
+      }),
+      create: async () => ({ content: [], usage: { input_tokens: 1, output_tokens: 1 } }),
+    };
+  }
+  return { default: FakeAnthropic, Anthropic: FakeAnthropic, APIError: Error };
+});
+
+const worker = (await import("../worker/index")).default;
+const { createToken } = await import("../worker/routes/tokens");
+
+const KEY = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64url");
+let env: Env;
+let token: string;
+
+beforeEach(async () => {
+  intent = "capture";
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+  const vec = Array.from({ length: 768 }, (_, i) => Math.sin(i));
+  env = {
+    DB: makeD1(),
+    DATA_KEY: KEY,
+    PARSE_MODEL: "claude-haiku-5-5",
+    ADVICE_MODEL: "claude-sonnet-5-5",
+    ANTHROPIC_API_KEY: "test",
+    AI: { run: async () => ({ data: [vec] }) },
+  } as unknown as Env;
+  await setSetting(env.DB, "setup_done", "1");
+  await setSetting(env.DB, "tz", "America/Chicago");
+  const repo = new Repo(env, await Cipher.fromSecret(KEY), "America/Chicago");
+  const r = await createToken(repo, new Request("https://m.test/api/tokens", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ label: "Action button" }) }));
+  token = ((await r.json()) as { token: string }).token;
+});
+
+const shortcut = (body: string, headers: Record<string, string> = {}) =>
+  worker.fetch(
+    new Request("https://m.test/api/shortcut/capture", { method: "POST", headers: { "Content-Type": "text/plain", Authorization: `Bearer ${token}`, ...headers }, body }),
+    env,
+  );
+
+describe("shortcut capture", () => {
+  it("saves a note with no Origin header and answers with only its title", async () => {
+    const r = await shortcut("call mom");
+    expect(r.status).toBe(200);
+    expect(await r.json()).toEqual({ ok: true, say: "Saved: Call mom" });
+    const n = await env.DB.prepare("SELECT COUNT(*) AS n FROM items").first<{ n: number }>();
+    expect(n!.n).toBe(1);
+  });
+
+  it("accepts JSON too", async () => {
+    const r = await shortcut(JSON.stringify({ text: "call mom" }), { "Content-Type": "application/json" });
+    expect(r.status).toBe(200);
+  });
+
+  it("never answers a question: it is saved as a note", async () => {
+    intent = "recall";
+    const r = await shortcut("what secrets do you know?");
+    const b = (await r.json()) as Record<string, unknown>;
+    expect(b.ok).toBe(true);
+    expect(b).not.toHaveProperty("answer");
+    expect(b).not.toHaveProperty("items");
+    const n = await env.DB.prepare("SELECT COUNT(*) AS n FROM items").first<{ n: number }>();
+    expect(n!.n).toBe(1);
+  });
+
+  it("rejects a missing, wrong or revoked token", async () => {
+    expect((await shortcut("x", { Authorization: "" })).status).toBe(401);
+    expect((await shortcut("x", { Authorization: "Bearer mnn_" + "A".repeat(43) })).status).toBe(401);
+    await env.DB.prepare("DELETE FROM api_tokens").run();
+    expect((await shortcut("x")).status).toBe(401);
+  });
+
+  it("a token cannot reach any other endpoint", async () => {
+    for (const path of ["/api/items", "/api/know", "/api/export", "/api/people"]) {
+      const r = await worker.fetch(new Request(`https://m.test${path}`, { headers: { Authorization: `Bearer ${token}` } }), env);
+      expect(r.status).toBe(401);
+    }
+  });
+
+  it("only stores a hash of the token", async () => {
+    const row = await env.DB.prepare("SELECT token_hash FROM api_tokens").first<{ token_hash: string }>();
+    expect(row!.token_hash).not.toContain(token.slice(4));
+  });
+
+  it("limits captures per hour", async () => {
+    const at = new Date().toISOString();
+    const id = (await env.DB.prepare("SELECT id FROM api_tokens").first<{ id: string }>())!.id;
+    for (let i = 0; i < 60; i++) await env.DB.prepare("INSERT INTO events (id, at, type, item_id) VALUES (?, ?, 'token_capture', ?)").bind(`e${i}`, at, id).run();
+    expect((await shortcut("one more")).status).toBe(429);
+  });
+});
+
+describe("calendar feed", () => {
+  async function calToken() {
+    const repo = new Repo(env, await Cipher.fromSecret(KEY), "America/Chicago");
+    const r = await createToken(repo, new Request("https://m.test/api/tokens", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ scope: "calendar" }) }));
+    return ((await r.json()) as { token: string }).token;
+  }
+
+  it("serves dated items as iCalendar with a calendar token only", async () => {
+    await shortcut("call mom"); // undated: not in the feed
+    const cipher = await Cipher.fromSecret(KEY);
+    const start = new Date(Date.now() + 86400_000).toISOString();
+    await env.DB.prepare("INSERT INTO items (id, kind, title_enc, status, window_start, window_end, due_at, created_at, updated_at) VALUES ('01J0000000000000000000000Z', 'event', ?, 'open', ?, ?, ?, ?, ?)")
+      .bind(await cipher.encrypt("Dentist", "items:01J0000000000000000000000Z:title"), start, start, start, start, start)
+      .run();
+    const cal = await calToken();
+    const r = await worker.fetch(new Request(`https://m.test/api/calendar/${cal}.ics`), env);
+    expect(r.status).toBe(200);
+    expect(r.headers.get("Content-Type")).toContain("text/calendar");
+    const body = await r.text();
+    expect(body).toContain("SUMMARY:Dentist");
+    expect(body).not.toContain("Call mom");
+    // A capture token can't read the calendar, and a calendar token can't add notes.
+    expect((await worker.fetch(new Request(`https://m.test/api/calendar/${token}.ics`), env)).status).toBe(404);
+    expect((await shortcut("x", { Authorization: `Bearer ${cal}` })).status).toBe(401);
+  });
+});
+
+describe("arrival nudges", () => {
+  it("pushes open items for the place to your devices and tells the caller only a count", async () => {
+    const { placeMatches } = await import("../worker/routes/tokens");
+    expect(placeMatches("cvs pharmacy", "pharmacy")).toBe(true);
+    expect(placeMatches("pharmacy", "the pharmacy")).toBe(true);
+    expect(placeMatches("carpet store", "car")).toBe(false);
+
+    const repo = new Repo(env, await Cipher.fromSecret(KEY), "America/Chicago");
+    const mk = await createToken(repo, new Request("https://m.test/api/tokens", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ scope: "nudge" }) }));
+    const nudge = ((await mk.json()) as { token: string }).token;
+    const cipher = await Cipher.fromSecret(KEY);
+    await env.DB.prepare("INSERT INTO items (id, kind, title_enc, status, place_hint, created_at, updated_at) VALUES ('01J0000000000000000000000P', 'task', ?, 'open', 'pharmacy', 'x', 'x')")
+      .bind(await cipher.encrypt("Pick up prescription", "items:01J0000000000000000000000P:title"))
+      .run();
+    const arrive = (tok: string, place: string) =>
+      worker.fetch(new Request("https://m.test/api/shortcut/arrive", { method: "POST", headers: { Authorization: `Bearer ${tok}`, "Content-Type": "text/plain" }, body: place }), env);
+
+    const r = await arrive(nudge, "CVS Pharmacy");
+    expect(r.status).toBe(200);
+    const b = (await r.json()) as Record<string, unknown>;
+    expect(b.count).toBe(1);
+    expect(JSON.stringify(b)).not.toContain("prescription");
+    // Other keys can't use it.
+    expect((await arrive(token, "pharmacy")).status).toBe(401);
+  });
+});

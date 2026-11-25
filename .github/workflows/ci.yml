@@ -30,7 +30,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   deploy:
-    # Off until you set the repository variable DEPLOY_ENABLED=true and the secrets below.
+    # Off until you set the repository variable DEPLOY_ENABLED=true, the variables read by scripts/ci-config.mjs
+    # and the secrets below. Migrations run before the new code, so a deploy never runs against an old schema.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.DEPLOY_ENABLED == 'true'
     needs: check
     runs-on: ubuntu-latest
@@ -42,6 +43,14 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: Fill in this deployment's public config
+        run: node scripts/ci-config.mjs
+        env:
+          D1_DATABASE_ID: ${{ vars.D1_DATABASE_ID }}
+          VAPID_PUBLIC_KEY: ${{ vars.VAPID_PUBLIC_KEY }}
+          VAPID_SUBJECT: ${{ vars.VAPID_SUBJECT }}
+          ENABLE_VECTORIZE: ${{ vars.ENABLE_VECTORIZE }}
+          ENABLE_BACKUPS: ${{ vars.ENABLE_BACKUPS }}
       - run: npm run build
       - name: Apply D1 migrations
         run: npx wrangler d1 migrations apply muninn --remote

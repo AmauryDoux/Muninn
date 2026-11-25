@@ -55,7 +55,7 @@ export function Know({ onPeopleChanged }: { onPeopleChanged: () => void }) {
       {data.people
         .filter((p) => p.relation !== "self")
         .map((p) => (
-          <PersonCard key={p.id} person={p} facts={factsFor("person", p.id)} onChange={reload} />
+          <PersonCard key={p.id} person={p} facts={factsFor("person", p.id)} others={data.people.filter((o) => o.id !== p.id && o.relation !== "self")} onChange={reload} />
         ))}
       <AddPerson onAdded={reload} />
       <section className="card">
@@ -132,8 +132,9 @@ function AddFact({ subjectType, subjectId, onAdded }: { subjectType: "me" | "per
   );
 }
 
-function PersonCard({ person, facts, onChange }: { person: Person; facts: Fact[]; onChange: () => void }) {
+function PersonCard({ person, facts, others, onChange }: { person: Person; facts: Fact[]; others: Person[]; onChange: () => void }) {
   const [editing, setEditing] = useState(false);
+  const [mergeInto, setMergeInto] = useState("");
   const [name, setName] = useState(person.name);
   const [aliases, setAliases] = useState(person.aliases.join(", "));
   const [relation, setRelation] = useState(person.relation);
@@ -173,6 +174,32 @@ function PersonCard({ person, facts, onChange }: { person: Person; facts: Fact[]
               Forget person
             </button>
           </div>
+          {others.length > 0 && (
+            <div className="row">
+              <select value={mergeInto} onChange={(e) => setMergeInto(e.target.value)} aria-label="Same person as">
+                <option value="">Same person as…</option>
+                {others.map((o) => (
+                  <option key={o.id} value={o.id}>
+                    {o.name}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                className="btn small"
+                disabled={!mergeInto}
+                onClick={async () => {
+                  const into = others.find((o) => o.id === mergeInto);
+                  if (!into || !confirm(`Merge ${person.name} into ${into.name}? Their notes, facts and reminders move to ${into.name}.`)) return;
+                  await api(`/api/people/${person.id}/merge`, { body: { into: into.id } });
+                  setEditing(false);
+                  onChange();
+                }}
+              >
+                Merge
+              </button>
+            </div>
+          )}
         </form>
       ) : (
         <h3 onClick={() => setEditing(true)}>

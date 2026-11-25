@@ -10,20 +10,25 @@ self.addEventListener("install", () => self.skipWaiting());
 self.addEventListener("activate", (e) => e.waitUntil(self.clients.claim()));
 
 self.addEventListener("push", (event) => {
-  let data: { title?: string; body?: string; url?: string; tag?: string } = {};
+  let data: { title?: string; body?: string; url?: string; tag?: string; badge?: number } = {};
   try {
     data = event.data?.json() ?? {};
   } catch {
     data = { body: event.data?.text() };
   }
+  const nav = self.navigator as Navigator & { setAppBadge?: (n?: number) => Promise<void>; clearAppBadge?: () => Promise<void> };
+  const badge =
+    typeof data.badge === "number" && nav.setAppBadge
+      ? (data.badge > 0 ? nav.setAppBadge(Math.min(data.badge, 99)) : nav.clearAppBadge?.())?.catch(() => {})
+      : undefined;
   event.waitUntil(
-    self.registration.showNotification(data.title ?? "Muninn", {
+    Promise.all([badge, self.registration.showNotification(data.title ?? "Muninn", {
       body: data.body ?? "",
       tag: data.tag,
       icon: "/icons/icon-192.png",
       badge: "/icons/badge-96.png",
       data: { url: data.url ?? "/" },
-    }),
+    })]),
   );
 });
 

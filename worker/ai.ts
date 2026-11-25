@@ -10,8 +10,35 @@ import { logModelError, logUsage } from "./lib/usage";
 
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
-function client(env: Env): Anthropic {
+export const DEFAULT_AI_BUDGET_USD = 2;
+
+export class BudgetError extends Error {
+  constructor(public spent: number, public budget: number) {
+    super(`Monthly AI budget reached (USD ${spent.toFixed(2)} of ${budget.toFixed(2)}). Notes are saved without AI until next month, or raise the budget in Settings.`);
+  }
+}
+
+/** Estimated spend this calendar month (UTC), from the usage log. */
+export async function monthSpend(db: D1Database, now = new Date()): Promise<number> {
+  const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
+  const row = await db
+    .prepare("SELECT COALESCE(SUM(json_extract(payload_json, '$.usd')), 0) AS usd FROM events WHERE type = 'model_usage' AND at >= ?")
+    .bind(start)
+    .first<{ usd: number }>();
+  return Number(row?.usd ?? 0);
+}
+
+/**
+ * Every Claude call goes through here. Past the monthly budget it throws, and each caller already handles a failed
+ * call (a note is saved unparsed, the brief falls back to counts), so a runaway client or a stolen session can't burn
+ * the key. Set a spend limit in the Anthropic console too: this guard is an estimate.
+ */
+export async function client(env: Env): Promise<Anthropic> {
   if (!env.ANTHROPIC_API_KEY) throw new Error("ANTHROPIC_API_KEY is not set");
+  const raw = (await env.DB.prepare("SELECT value FROM settings WHERE key = 'ai_budget_usd'").first<{ value: string }>())?.value;
+  const budget = raw ? Number(raw) : DEFAULT_AI_BUDGET_USD;
+  const spent = await monthSpend(env.DB);
+  if (spent >= budget) throw new BudgetError(spent, budget);
   return new Anthropic({ apiKey: env.ANTHROPIC_API_KEY, maxRetries: 2, timeout: 25_000 });
 }
 
@@ -33,6 +60,7 @@ Rules for capture:
   Put a clock time in "time" as HH:MM 24h. No time said: type "none".
 - facts: only durable facts stated in the text (sizes, models, allergies, preferences). Keys in snake_case.
 - missing: at most 2 facts the task clearly needs and the text does not give (e.g. bed_size when buying sheets for someone). Use the known facts list: never ask for a fact that is already known.
+- also: when one note holds several separate to-dos ("buy milk, call mom tomorrow and book the dentist"), the first goes in the main fields and each other one in also, with its own person and time. Facts and categories stay on the main item. Empty for a single item.
 - confidence: lower it when the note is ambiguous.
 - subtype: pick the category that fits, else "none". Fill attrs only with that subtype's keys:
 ${CATEGORIES.map((c) => `  ${c.subtype}: ${c.hint}. attrs: ${c.fields.map((f) => f.key + (f.type === "enum" ? `(${f.options!.join("|")})` : f.type === "date" ? "(YYYY-MM-DD)" : f.type === "money" ? "(e.g. 40 USD)" : "")).join(", ")}`).join("\n")}
@@ -68,7 +96,7 @@ export async function parseNote(env: Env, text: string, ctx: ParseContext): Prom
     `Known facts (subject, key): ${JSON.stringify(ctx.knownFacts.slice(0, 100))}`,
   ].join("\n");
   const model = env.PARSE_MODEL;
-  const res = await client(env).messages.parse({
+  const res = await (await client(env)).messages.parse({
     model,
     max_tokens: 4000,
     thinking: { type: "disabled" },
@@ -106,7 +134,7 @@ export interface AnswerItem {
 
 export async function answerQuestion(env: Env, question: string, items: AnswerItem[], today: string): Promise<AnswerOut | null> {
   const model = env.PARSE_MODEL;
-  const res = await client(env).messages.parse({
+  const res = await (await client(env)).messages.parse({
     model,
     max_tokens: 2000,
     thinking: { type: "disabled" },
@@ -146,7 +174,7 @@ export interface AdviceContext {
 export async function giveAdvice(env: Env, question: string, ctx: AdviceContext): Promise<AdviceOut | null> {
   const content = `<profile>\n${JSON.stringify(ctx)}\n</profile>\n<question>\n${question}\n</question>`;
   const call = async (model: string) => {
-    const res = await client(env).messages.parse({
+    const res = await (await client(env)).messages.parse({
       model,
       // Sonnet 5.5 cannot turn thinking off; leave room for it so the JSON is never cut short.
       max_tokens: 8000,
@@ -199,7 +227,7 @@ export async function wordTips(env: Env, drafts: { id: string; draft: string }[]
   const out = new Map<string, string>();
   if (!drafts.length || !env.ANTHROPIC_API_KEY) return out;
   const model = env.PARSE_MODEL;
-  const res = await client(env).messages.parse({
+  const res = await (await client(env)).messages.parse({
     model,
     max_tokens: 2000,
     thinking: { type: "disabled" },
