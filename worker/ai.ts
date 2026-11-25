@@ -53,6 +53,7 @@ Rules for capture:
 - title: short, imperative for tasks ("Buy new sheets"), never include who or when (those have their own fields).
 - for_person / requested_by: keep the user's own words in "mention" ("wife", "daughter", "Emma"). mention "" when it is the user or nobody.
 - when: never compute dates yourself. Map the phrase to a reference:
+  "in 5 minutes" relative minute 5, "in 2 hours" relative hour 2, "in half an hour" relative minute 30 (time ""),
   "today" relative day 0, "tomorrow" relative day 1, "in 3 days" relative day 3,
   "this week" relative week 0, "next week" relative week 1, "this weekend" relative weekend 0, "next month" relative month 1,
   "on Friday" or "Friday" weekday 5 offset 0, "next Friday" weekday 5 offset 0 unless the user clearly means the week after,

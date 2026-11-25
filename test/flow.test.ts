@@ -102,6 +102,15 @@ describe("tell", () => {
     expect(b.item.due_start ?? b.item.window_start).toBeTruthy();
   });
 
+  it("remind me in 5 minutes gets a due time, not Anytime", async () => {
+    reply = () => capture({ kind: "task", title: "Check the oven", when: { ...noTime, type: "relative", unit: "minute", offset: 5 } });
+    const before = Date.now();
+    const b = await send("remind me to check the oven in 5 minutes");
+    const due = Date.parse(b.item.due_at);
+    expect(due).toBeGreaterThanOrEqual(before + 5 * 60_000 - 1000);
+    expect(due).toBeLessThanOrEqual(Date.now() + 6 * 60_000);
+  });
+
   it("a dated task resolves the date in code", async () => {
     reply = () => capture({ kind: "task", title: "Dentist", when: { ...noTime, type: "relative", unit: "day", offset: 1, time: "15:00" } });
     const b = await send("dentist tomorrow 3pm");
