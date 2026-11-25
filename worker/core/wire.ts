@@ -36,7 +36,9 @@ const WireCapture = z.object({
   when: TimeRef.describe("When it should happen. type=none if no time was said."),
   place_hint: z.string().describe('Kind of place where it gets done, e.g. "pharmacy", else "".'),
   confidence: z.number().describe("0 to 1: how sure you are this reading is what the user meant."),
-  subtype: z.enum(["none", ...SUBTYPES]).describe("The category when one fits (see the subtype list), else none."),
+  // Subtypes are plain strings checked in toParseOutput: two copies of a 20-value enum were a large share of the
+  // compiled grammar, and an unknown value simply means "none".
+  subtype: z.string().describe("The category when one fits, exactly as named in the subtype list, else none."),
   attrs: z
     .array(z.object({ key: z.string(), value: z.string() }))
     .describe("Attributes for the subtype, keys from the subtype list only. Dates as YYYY-MM-DD, money as '40 USD'. Often empty."),
@@ -59,21 +61,21 @@ const WireCapture = z.object({
   missing: z
     .array(
       z.object({
-        subject: Mention,
+        who: z.string().describe('Who the fact is about, as written ("wife", "Emma"); "" for the user.'),
         key: z.string().describe("snake_case fact key that would be needed to do the task well."),
         question: z.string().describe("One short question to ask the user."),
       }),
     )
     .describe("At most 2 facts that the task needs and the text does not give."),
+  // Kept deliberately small: the full per-item shape (people, TimeRef, place) pushed the request past the
+  // API's compiled-grammar size limit and every parse failed. Extra items carry a title, a name and a resolved date.
   also: z
     .array(
       z.object({
-        kind: z.enum(["task", "note", "event"]),
-        title: z.string().describe("Short imperative, 2-8 words."),
-        for_person: Mention,
-        requested_by: Mention,
-        when: TimeRef,
-        place_hint: z.string().describe('Kind of place, else "".'),
+        title: z.string().describe("Short imperative, 2-8 words; keep a person's name in it ('Call mom')."),
+        who: z.string().describe('Who it is for or about, as written ("mom", "Emma"), else "".'),
+        date: z.string().describe('YYYY-MM-DD when a day was said (resolve "tomorrow", "Friday" from today), else "".'),
+        time: z.string().describe('HH:MM 24h if a time was said, else "".'),
       }),
     )
     .describe("Other separate to-dos in the same note, beyond the main one above: 'buy milk, call mom tomorrow and book the dentist' = main 'Buy milk', also ['Call mom' tomorrow, 'Book the dentist']. At most 5. Empty for a single item."),
@@ -81,13 +83,16 @@ const WireCapture = z.object({
 
 const WireRecall = z.object({
   mode: z.enum(["filter", "semantic"]).describe("filter: who/when/status questions. semantic: topic questions."),
-  requested_by: Mention,
-  for_person: Mention,
+  // Names only (no relation object): a lookup matches "wife" against relations anyway, and each Mention object
+  // adds to the compiled grammar.
+  requested_by: z.string().describe('Who asked the user, as written ("wife", "Emma"), else "".'),
+  for_person: z.string().describe('Who the items are for, as written, else "".'),
   created: TimeRef.describe("When the item was captured ('2 weeks ago' is relative week -2). type=none if not asked."),
   scheduled: TimeRef.describe("When the item is due/scheduled. type=none if not asked."),
   status: z.enum(["open", "done", "dropped", "any"]),
   kind: z.enum(["task", "note", "fact", "event", "any"]),
-  subtype: z.enum(["any", ...SUBTYPES]).describe("Category asked about ('who owes me money' = debt), else any."),
+  // A plain string, not a second copy of the subtype enum: enums grow the compiled grammar. Checked in toParseOutput.
+  subtype: z.string().describe("Category asked about, from the subtype list ('who owes me money' = debt), else any."),
   topic: z.string().describe('The subject being asked about, for semantic search, e.g. "my car", else "".'),
 });
 
@@ -108,6 +113,7 @@ const str = (s: string | undefined | null) => {
   return t && t.toLowerCase() !== "null" && t.toLowerCase() !== "none" ? t : null;
 };
 const mention = (m: WMention | undefined | null) => (m && str(m.mention) ? { mention: str(m.mention)!, relation: str(m.relation) } : null);
+const name = (s: string) => (str(s) ? { mention: str(s)!, relation: null } : null);
 const time = (t: WTime): CaptureOut["when"] => ({
   type: t.type,
   date: str(t.date),
@@ -117,6 +123,16 @@ const time = (t: WTime): CaptureOut["when"] => ({
   weekday: t.type === "weekday" && t.weekday >= 0 && t.weekday <= 6 ? t.weekday : null,
   time: str(t.time),
 });
+
+const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
+const HHMM = /^\d{2}:\d{2}$/;
+const alsoWhen = (date: string, at: string): CaptureOut["when"] => {
+  const d = ISO_DAY.test(date.trim()) ? date.trim() : null;
+  const t = HHMM.test(at.trim()) ? at.trim() : null;
+  if (d) return { type: "date", date: d, end_date: null, unit: null, offset: null, weekday: null, time: t };
+  if (t) return { type: "relative", date: null, end_date: null, unit: "day", offset: 0, weekday: null, time: t };
+  return { type: "none", date: null, end_date: null, unit: null, offset: null, weekday: null, time: null };
+};
 
 export function toParseOutput(w: WireParse): ParseOutput {
   const c = w.capture;
@@ -130,7 +146,7 @@ export function toParseOutput(w: WireParse): ParseOutput {
         when: time(c.when),
         place_hint: str(c.place_hint),
         confidence: c.confidence,
-        subtype: c.subtype,
+        subtype: (SUBTYPES as readonly string[]).includes(c.subtype.trim()) ? (c.subtype.trim() as CaptureOut["subtype"]) : "none",
         attrs: c.attrs,
         thing: str(c.thing_name) ? { name: str(c.thing_name)!, kind: str(c.thing_kind) ?? "other" } : null,
         recurrence:
@@ -143,24 +159,24 @@ export function toParseOutput(w: WireParse): ParseOutput {
                 by_weekday: c.repeat_weekdays.length ? c.repeat_weekdays : null,
               },
         facts: c.facts.map((f) => ({ subject: f.about_thing ? null : mention(f.subject), about_thing: f.about_thing, key: f.key, value: f.value })),
-        missing: c.missing.map((m) => ({ subject: mention(m.subject), key: m.key, question: m.question })),
+        missing: c.missing.map((m) => ({ subject: name(m.who), key: m.key, question: m.question })),
         also: (c.also ?? [])
           .filter((a) => str(a.title))
           .slice(0, 5)
-          .map((a) => ({ kind: a.kind, title: a.title.trim(), for_person: mention(a.for_person), requested_by: mention(a.requested_by), when: time(a.when), place_hint: str(a.place_hint) })),
+          .map((a) => ({ kind: "task" as const, title: a.title.trim(), for_person: name(a.who), requested_by: null, when: alsoWhen(a.date, a.time), place_hint: null })),
       }
     : null;
   const r = w.recall;
   const recall: RecallOut | null = r
     ? {
         mode: r.mode,
-        requested_by: mention(r.requested_by),
-        for_person: mention(r.for_person),
+        requested_by: name(r.requested_by),
+        for_person: name(r.for_person),
         created: time(r.created),
         scheduled: time(r.scheduled),
         status: r.status,
         kind: r.kind,
-        subtype: r.subtype,
+        subtype: (SUBTYPES as readonly string[]).includes(r.subtype) ? r.subtype : "any",
         topic: str(r.topic),
       }
     : null;
@@ -187,4 +203,30 @@ export function schemaComplexity(schema: unknown): { unions: number; optional: n
   };
   walk(schema);
   return { unions, optional };
+}
+
+/**
+ * Rough size of the grammar the API compiles from a schema: $refs expanded (the compiler inlines them),
+ * descriptions left out. See the budget test for the numbers behind GRAMMAR_BUDGET.
+ */
+export const GRAMMAR_BUDGET = { chars: 4100, enumValues: 60, objects: 14 } as const;
+
+export function grammarSize(schema: unknown): { chars: number; enumValues: number; objects: number } {
+  const root = schema as Record<string, unknown>;
+  const defs = (root.$defs ?? root.definitions ?? {}) as Record<string, unknown>;
+  let enumValues = 0;
+  let objects = 0;
+  const expand = (n: unknown, depth: number): unknown => {
+    if (depth > 20) throw new Error("schema nesting too deep");
+    if (Array.isArray(n)) return n.map((x) => expand(x, depth + 1));
+    if (!n || typeof n !== "object") return n;
+    const o = n as Record<string, unknown>;
+    if (typeof o.$ref === "string") return expand(defs[o.$ref.split("/").pop()!], depth + 1);
+    if (Array.isArray(o.enum)) enumValues += o.enum.length;
+    if (o.properties && typeof o.properties === "object") objects++;
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(o)) if (k !== "description" && k !== "$defs" && k !== "definitions") out[k] = expand(v, depth + 1);
+    return out;
+  };
+  return { chars: JSON.stringify(expand(root, 0)).length, enumValues, objects };
 }

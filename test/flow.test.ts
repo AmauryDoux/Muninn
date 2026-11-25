@@ -112,7 +112,7 @@ describe("ask", () => {
     await send("Emma wants the blue Lego set");
     reply = (r) => {
       if (r.system?.startsWith("You turn")) {
-        return { intent: "recall", capture: null, recall: { mode: "filter", requested_by: none, for_person: { mention: "Emma", relation: "" }, created: noTime, scheduled: noTime, status: "open", kind: "any", subtype: "gift_idea", topic: "" } };
+        return { intent: "recall", capture: null, recall: { mode: "filter", requested_by: "", for_person: "Emma", created: noTime, scheduled: noTime, status: "open", kind: "any", subtype: "gift_idea", topic: "" } };
       }
       const ids = [...r.messages[0].content.matchAll(/"id":"([^"]+)"/g)].map((m) => m[1]);
       return { answer: "Emma wants the blue Lego set.", cited_ids: ids };
@@ -209,8 +209,8 @@ describe("several to-dos in one note", () => {
         kind: "task",
         title: "Buy milk",
         also: [
-          { kind: "task", title: "Call mom", for_person: { mention: "mom", relation: "mother" }, requested_by: none, when: { ...noTime, type: "relative", unit: "day", offset: 1 }, place_hint: "" },
-          { kind: "task", title: "Book the dentist", for_person: none, requested_by: none, when: noTime, place_hint: "" },
+          { title: "Call mom", who: "mom", date: "2099-03-11", time: "" },
+          { title: "Book the dentist", who: "", date: "", time: "" },
         ],
       });
     const b = await send("buy milk, call mom tomorrow and book the dentist");
