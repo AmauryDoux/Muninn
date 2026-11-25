@@ -172,13 +172,14 @@ function Main({ hasPasskey, onSignedOut, onPasskeyAdded }: { hasPasskey: boolean
           <span className="spacer" />
           {queued > 0 && <span className="badge">{queued} waiting</span>}
         </div>
-        {!sub && (
-          <>
-            <h1 className="largetitle">{titles[tab]}</h1>
-            {tab === "home" && <p className="subtitle">{now.toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" })}</p>}
-          </>
-        )}
       </header>
+      {/* The large title scrolls with the page, like iOS; only the slim bar above stays, on a solid background. */}
+      {!sub && (
+        <div className="titlebar">
+          <h1 className="largetitle">{titles[tab]}</h1>
+          {tab === "home" && <p className="subtitle">{now.toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" })}</p>}
+        </div>
+      )}
       <main className={showComposer ? "" : "no-composer"}>
         {sub?.kind === "item" ? (
           <ItemDetail id={sub.id} people={people} onBack={back} />
