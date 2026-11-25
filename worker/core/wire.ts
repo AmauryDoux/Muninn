@@ -99,14 +99,25 @@ const WireRecall = z.object({
   topic: z.string().describe('The subject being asked about, for semantic search, e.g. "my car", else "".'),
 });
 
-export const WireParseSchema = z.object({
-  intent: z
-    .enum(["capture", "recall", "advice"])
-    .describe("capture: the user tells something to remember or do. recall: the user asks what they captured. advice: the user asks for a suggestion, recommendation or how-to."),
-  capture: WireCapture.nullable(),
-  recall: WireRecall.nullable(),
-});
-export type WireParse = z.infer<typeof WireParseSchema>;
+// Two strict schemas, two calls only for questions. One schema holding both capture and recall hit the API's
+// compiled-grammar limit twice ("The compiled grammar is too large"), and the limit is not published, so the
+// capture schema no longer carries the recall object at all. Recall questions pay one extra small call.
+const Intent = z
+  .enum(["capture", "recall", "advice"])
+  .describe("capture: the user tells something to remember or do. recall: the user asks what they captured. advice: the user asks for a suggestion, recommendation or how-to.");
+
+/** First call, every note: the intent, and the capture when it is one. */
+export const WireCaptureParseSchema = z.object({ intent: Intent, capture: WireCapture.nullable() });
+/** Second call, only when the first said recall. */
+export const WireRecallSchema = z.object({ recall: WireRecall });
+/** Every schema sent for parsing, for the size test and `npm run check:ai`. */
+export const PARSE_SCHEMAS = { parse_capture: WireCaptureParseSchema, parse_recall: WireRecallSchema } as const;
+
+export type WireParse = {
+  intent: z.infer<typeof Intent>;
+  capture: z.infer<typeof WireCapture> | null;
+  recall: z.infer<typeof WireRecall> | null;
+};
 
 type WMention = z.infer<typeof Mention>;
 type WTime = z.infer<typeof TimeRef>;
@@ -212,9 +223,10 @@ export function schemaComplexity(schema: unknown): { unions: number; optional: n
 
 /**
  * Rough size of the grammar the API compiles from a schema: $refs expanded (the compiler inlines them),
- * descriptions left out. See the budget test for the numbers behind GRAMMAR_BUDGET.
+ * descriptions left out. Only a proxy: the API's own limit is not published and this measure did not predict it
+ * (a smaller schema by this measure failed). `npm run check:ai` sends the real schemas to the API before a deploy.
  */
-export const GRAMMAR_BUDGET = { chars: 4100, enumValues: 60, objects: 14 } as const;
+export const GRAMMAR_BUDGET = { chars: 3000, enumValues: 40, objects: 11 } as const;
 
 export function grammarSize(schema: unknown): { chars: number; enumValues: number; objects: number } {
   const root = schema as Record<string, unknown>;

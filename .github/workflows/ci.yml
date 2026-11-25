@@ -52,6 +52,10 @@ jobs:
           ENABLE_VECTORIZE: ${{ vars.ENABLE_VECTORIZE }}
           ENABLE_BACKUPS: ${{ vars.ENABLE_BACKUPS }}
       - run: npm run build
+      - name: Check the AI schemas against the API (a refused schema would break every capture)
+        run: npm run check:ai
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       - name: Apply D1 migrations
         run: npx wrangler d1 migrations apply muninn --remote
         env:

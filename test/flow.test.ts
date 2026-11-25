@@ -130,8 +130,14 @@ describe("ask", () => {
       const ids = [...r.messages[0].content.matchAll(/"id":"([^"]+)"/g)].map((m) => m[1]);
       return { answer: "Emma wants the blue Lego set.", cited_ids: ids };
     };
+    const before = calls.length;
     const b = await send("what gift ideas do I have for Emma?");
     expect(b.type).toBe("answer");
+    // A question costs two small parse calls: the capture schema (which has no recall object), then the recall one.
+    const parses = calls.slice(before).filter((c) => c.system?.startsWith("You turn"));
+    expect(parses).toHaveLength(2);
+    expect(Object.keys((parses[0].output_config!.format!.schema as { properties: object }).properties)).toEqual(["intent", "capture"]);
+    expect(parses[1].system).toMatch(/^You turn one question/);
     expect(b.answer).toContain("Lego");
     expect(b.items).toHaveLength(1);
   });
