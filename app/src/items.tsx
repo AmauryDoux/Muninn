@@ -257,7 +257,7 @@ export function ItemDetail({ id, people, onBack }: { id: string; people: Person[
         )}
         <div className="k">Details</div>
         <div
-          className="v tap"
+          className="v tap prewrap"
           onClick={() => {
             setDraft(item.details ?? "");
             setEdit("details");

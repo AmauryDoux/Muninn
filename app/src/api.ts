@@ -104,7 +104,17 @@ export interface GapQuestion {
   question: string;
 }
 export type CaptureResult =
-  | { type: "capture"; item: Item; also?: Item[]; question: GapQuestion | null; duplicate?: boolean; ai_error?: string | null }
+  | {
+      type: "capture";
+      item: Item;
+      also?: Item[];
+      question: GapQuestion | null;
+      duplicate?: boolean;
+      ai_error?: string | null;
+      capture_id?: string;
+      /** Set when the note was added to an existing open item instead of making a new one. */
+      updated?: { item_id: string; done: boolean } | null;
+    }
   | { type: "answer"; answer: string; items: Item[]; disclaimer?: string | null; advice?: boolean; because?: Because[]; ai_error?: string | null };
 
 // ---- offline capture queue (local storage is only a cache; the server is the source of truth) ----

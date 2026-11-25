@@ -27,7 +27,7 @@ vi.mock("@anthropic-ai/sdk", () => {
                 capture: {
                   kind: "task", title: "Call mom", details: "", for_person: { mention: "", relation: "" }, requested_by: { mention: "", relation: "" },
                   when: { type: "none", date: "", end_date: "", unit: "none", offset: 0, weekday: -1, time: "" }, place_hint: "", confidence: 0.9, subtype: "none", attrs: [],
-                  thing_name: "", thing_kind: "", repeat: "none", repeat_interval: 1, repeat_months: [], repeat_weekdays: [], facts: [], missing: [], also: [],
+                  thing_name: "", thing_kind: "", repeat: "none", repeat_interval: 1, repeat_months: [], repeat_weekdays: [], facts: [], missing: [], update: "", update_done: false, also: [],
                 },
               },
       }),

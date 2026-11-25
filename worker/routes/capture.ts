@@ -16,6 +16,7 @@ import { HttpError, json, readJson, str } from "../lib/http";
 import { ulid } from "../lib/ulid";
 import type { ItemRow, Repo } from "../repo";
 import { searchVectors, storeVector } from "../vectors";
+import { whenText } from "../brief";
 
 const MAX_NOTE = 2000;
 const MAX_QUEUE_AGE_MS = 14 * 86400_000;
@@ -105,12 +106,23 @@ export async function handleCapture(repo: Repo, req: Request, tz: string, opts: 
   let out: ParseOutput | null = null;
   let model: string | null = repo.env.PARSE_MODEL;
   let aiError: string | null = null;
+  // One embedding, used twice: to find open items this note may be about, and to store the note for search.
+  let vec: Float32Array | null = null;
+  try {
+    vec = await embed(repo.env, text);
+  } catch (e) {
+    console.warn("embed failed", e instanceof Error ? e.message : e);
+  }
+  // A capture-only key (Shortcuts) may only add, never change an existing item.
+  const related = opts.captureOnly ? [] : await relatedOpenItems(repo, text, vec);
+  const refs = new Map(related.map((r, i) => [String(i + 1), r]));
   try {
     ({ out, model } = await parseNote(repo.env, text, {
       now,
       tz,
       people: people.map((p) => ({ name: p.name, aliases: p.aliases, relation: p.relation })),
       knownFacts: factKeys.map((f) => ({ subject: f.subject_type === "me" ? "me" : nameOf(f.subject_id), key: f.key })),
+      openItems: related.map((r, i) => ({ ref: String(i + 1), title: r.title, when: whenText(r.row, tz), for: nameOf(r.row.for_person_id) === "me" ? null : nameOf(r.row.for_person_id) })),
     }));
   } catch (e) {
     // Never lose a capture because the model is down: keep the raw note and let the user fix it.
@@ -156,78 +168,37 @@ export async function handleCapture(repo: Repo, req: Request, tz: string, opts: 
     recurrence: null,
     facts: [],
     missing: [],
+    update: null,
+    update_done: false,
     also: [],
   };
 
-  const forP = await resolveMention(repo, people, cap.for_person, true);
-  const byP = await resolveMention(repo, people, cap.requested_by, true);
-  let win = resolveTimeRef(cap.when, now, tz);
-  const rrule = recurrenceToRule(cap.recurrence);
-  // A repeating item with no date starts at its next occurrence ("change the AC filter every 3 months").
-  const first = rrule && !win ? firstWindow(rrule, now, tz) : null;
-  if (first) win = { startDate: "", endDate: "", start: new Date(first.window_start!), end: new Date(first.window_end!), dueAt: null };
-  if (rrule && win && !win.dueAt && cap.when.time) {
-    // "every morning at 8": keep the time on the first occurrence.
-    const r = resolveTimeRef({ type: "date", date: civilToIso(civilOf(win.start, tz)), time: cap.when.time }, now, tz);
-    if (r) win = r;
-  }
-
   const captureId = ulid();
-  const itemId = ulid();
   const iso = now.toISOString();
   const confidence = Math.max(0, Math.min(1, Number(cap.confidence) || 0));
-  const title = (cap.title || text).slice(0, 200);
-  await repo.db.batch([
-    repo.db
-      .prepare(
-        "INSERT INTO captures (id, created_at, source, raw_text_enc, transcript_enc, client_id, parse_enc, parser_version, model) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-      )
-      .bind(
-        captureId,
-        iso,
-        source,
-        await repo.cipher.encrypt(text, `captures:${captureId}:raw_text`),
-        null,
-        clientId,
-        out ? await repo.cipher.encrypt(JSON.stringify(out), `captures:${captureId}:parse`) : null,
-        PARSER_VERSION,
-        model,
-      ),
-    repo.db
-      .prepare(
-        `INSERT INTO items (id, capture_id, kind, title_enc, details_enc, for_person_id, requested_by_person_id,
-          window_start, window_end, due_at, status, place_hint, confidence, recurrence, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?)`,
-      )
-      .bind(
-        itemId,
-        captureId,
-        cap.kind,
-        await repo.cipher.encrypt(title, `items:${itemId}:title`),
-        await repo.cipher.encryptNullable(cap.details?.slice(0, 2000) || null, `items:${itemId}:details`),
-        forP?.id ?? null,
-        byP?.id ?? null,
-        win ? win.start.toISOString() : null,
-        win ? win.end.toISOString() : null,
-        win?.dueAt ? win.dueAt.toISOString() : null,
-        cap.place_hint?.slice(0, 100) ?? null,
-        confidence,
-        rrule,
-        iso,
-        iso,
-      ),
-  ]);
+  await repo.db
+    .prepare(
+      "INSERT INTO captures (id, created_at, source, raw_text_enc, transcript_enc, client_id, parse_enc, parser_version, model) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(
+      captureId,
+      iso,
+      source,
+      await repo.cipher.encrypt(text, `captures:${captureId}:raw_text`),
+      null,
+      clientId,
+      out ? await repo.cipher.encrypt(JSON.stringify(out), `captures:${captureId}:parse`) : null,
+      PARSER_VERSION,
+      model,
+    )
+    .run();
 
-  // Category: typed attributes, the thing it is about, triggers ("30 days before the warranty ends").
-  const cat = category(cap.subtype === "none" ? null : cap.subtype);
-  const known = await things(repo);
-  const thing = cap.thing?.name ? await resolveThing(repo, known, cap.thing.name, cap.thing.kind) : null;
-  if (cat) {
-    const currency = (await getSetting(repo.db, "currency")) ?? "USD";
-    await applyCategory(repo, itemId, { subtype: cat.subtype, attrs: cap.attrs, thing: thing ? { name: thing.name, kind: thing.kind } : null, recurrence: rrule }, tz, currency);
-  }
-  // A plain task or note about an owned object ("change the AC filter") is still linked to it.
-  if (thing && !cat?.thing) await linkThing(repo, itemId, thing.id);
+  // The note is about an open item that was offered to the model: add it to that item instead of making a new one.
+  // The client shows "Updated" with "Make it a new item instead" and "Undo" (revertUpdate).
+  const target = cap.update ? refs.get(cap.update) : undefined;
+  const updated = target ? await applyUpdate(repo, target.row, captureId, text, cap.update_done, now, tz) : null;
+  const thing = cap.thing?.name ? await resolveThing(repo, await things(repo), cap.thing.name, cap.thing.kind) : null;
+  const itemId = updated ? target!.row.id : await insertItem(repo, { captureId, cap, text, now, tz, people, thing });
 
   // Told facts: about a person, the user, or the thing ("spare key is in the blue drawer").
   for (const f of cap.facts.slice(0, 6)) {
@@ -292,16 +263,189 @@ export async function handleCapture(repo: Repo, req: Request, tz: string, opts: 
     alsoItems.push(extraItem);
   }
 
-  // Embedding failures must not lose the capture.
+  // Embedding failures must not lose the capture (the cron embeds notes that have no vector).
   try {
-    await storeVector(repo.env, captureId, itemId, iso, await embed(repo.env, text));
+    if (vec) await storeVector(repo.env, captureId, itemId, iso, vec);
   } catch (e) {
-    console.warn("embed failed", e instanceof Error ? e.message : e);
+    console.warn("vector store failed", e instanceof Error ? e.message : e);
   }
 
   const row = (await repo.getItemRow(itemId))!;
   const extraRows = (await Promise.all(alsoItems.map((id) => repo.getItemRow(id)))).filter((x) => x !== null);
-  return json({ type: "capture", item: (await repo.itemViews([row]))[0], also: await repo.itemViews(extraRows), question, ai_error: aiError });
+  return json({
+    type: "capture",
+    item: (await repo.itemViews([row]))[0],
+    also: await repo.itemViews(extraRows),
+    question,
+    ai_error: aiError,
+    capture_id: captureId,
+    updated,
+  });
+}
+
+const RELATED_MAX = 5;
+const STOP = new Set("about after again also been before could from have just like made make need only over some than that them then they this told want were what when where which will with would your".split(" "));
+const words = (t: string) => new Set(t.toLowerCase().split(/[^a-z0-9\u00c0-\u024f]+/).filter((w) => w.length >= 4 && !STOP.has(w)));
+
+/**
+ * Open items the note may be about, for the model to choose from (it may choose none): the nearest by meaning,
+ * then titles sharing a word, so it still works when there is no embedding. At most RELATED_MAX.
+ */
+export async function relatedOpenItems(repo: Repo, text: string, vec: Float32Array | null): Promise<{ row: ItemRow; title: string }[]> {
+  const ids: string[] = [];
+  if (vec) {
+    try {
+      for (const h of await searchVectors(repo.env, vec, 12)) if (!ids.includes(h.itemId)) ids.push(h.itemId);
+    } catch (e) {
+      console.warn("related search failed", e instanceof Error ? e.message : e);
+    }
+  }
+  const { results } = await repo.db.prepare("SELECT * FROM items WHERE status = 'open' ORDER BY updated_at DESC LIMIT 300").all<ItemRow>();
+  const open = new Map(results.map((r) => [r.id, r]));
+  const titled = await Promise.all(results.map(async (r) => ({ row: r, title: await repo.cipher.decrypt(r.title_enc, `items:${r.id}:title`) })));
+  const byId = new Map(titled.map((t) => [t.row.id, t]));
+  const w = words(text);
+  const lexical = titled
+    .map((t) => ({ t, n: [...words(t.title)].filter((x) => w.has(x)).length }))
+    .filter((x) => x.n > 0)
+    .sort((a, b) => b.n - a.n)
+    .map((x) => x.t.row.id);
+  const picked: string[] = [];
+  for (const id of [...ids, ...lexical]) {
+    if (open.has(id) && !picked.includes(id)) picked.push(id);
+    if (picked.length >= RELATED_MAX) break;
+  }
+  return picked.map((id) => byId.get(id)!);
+}
+
+const UPDATE_COLUMNS = ["status", "details_enc", "window_start", "window_end", "due_at", "snoozed_until", "reminded_start_at", "reminded_end_at"] as const;
+
+/** Adds the note to an existing item as a dated line, and closes it when the note says it is finished. */
+async function applyUpdate(repo: Repo, row: ItemRow, captureId: string, text: string, done: boolean, now: Date, tz: string): Promise<{ item_id: string; done: boolean }> {
+  const prev = Object.fromEntries(UPDATE_COLUMNS.map((c) => [c, (row as unknown as Record<string, string | null>)[c] ?? null]));
+  const old = await repo.cipher.decryptNullable(row.details_enc, `items:${row.id}:details`);
+  const line = `${civilToIso(civilOf(now, tz))}: ${text.trim().slice(0, 500)}`;
+  // Keep the newest lines when the details get long.
+  const details = (old ? `${old}\n${line}` : line).slice(-2000);
+  // A recurring item is not closed by a progress note: "done" on it means this occurrence, which the list handles.
+  const close = done && !row.recurrence;
+  await repo.db
+    .prepare("UPDATE items SET details_enc = ?, status = ?, updated_at = ? WHERE id = ?")
+    .bind(await repo.cipher.encrypt(details, `items:${row.id}:details`), close ? "done" : row.status, now.toISOString(), row.id)
+    .run();
+  await repo.event("update", { itemId: row.id, payload: { capture_id: captureId, done: close, prev } });
+  return { item_id: row.id, done: close };
+}
+
+interface NewItem {
+  captureId: string;
+  cap: CaptureOut;
+  text: string;
+  now: Date;
+  tz: string;
+  people: Person[];
+  thing: Awaited<ReturnType<typeof resolveThing>> | null;
+}
+
+/** A new item from a parsed note, with its category, thing and triggers. */
+async function insertItem(repo: Repo, { captureId, cap, text, now, tz, people, thing }: NewItem): Promise<string> {
+  const forP = await resolveMention(repo, people, cap.for_person, true);
+  const byP = await resolveMention(repo, people, cap.requested_by, true);
+  let win = resolveTimeRef(cap.when, now, tz);
+  const rrule = recurrenceToRule(cap.recurrence);
+  // A repeating item with no date starts at its next occurrence ("change the AC filter every 3 months").
+  const first = rrule && !win ? firstWindow(rrule, now, tz) : null;
+  if (first) win = { startDate: "", endDate: "", start: new Date(first.window_start!), end: new Date(first.window_end!), dueAt: null };
+  if (rrule && win && !win.dueAt && cap.when.time) {
+    // "every morning at 8": keep the time on the first occurrence.
+    const r = resolveTimeRef({ type: "date", date: civilToIso(civilOf(win.start, tz)), time: cap.when.time }, now, tz);
+    if (r) win = r;
+  }
+  const itemId = ulid();
+  const iso = now.toISOString();
+  const confidence = Math.max(0, Math.min(1, Number(cap.confidence) || 0));
+  const title = (cap.title || text).slice(0, 200);
+  await repo.db
+    .prepare(
+      `INSERT INTO items (id, capture_id, kind, title_enc, details_enc, for_person_id, requested_by_person_id,
+        window_start, window_end, due_at, status, place_hint, confidence, recurrence, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?)`,
+    )
+    .bind(
+      itemId,
+      captureId,
+      cap.kind,
+      await repo.cipher.encrypt(title, `items:${itemId}:title`),
+      await repo.cipher.encryptNullable(cap.details?.slice(0, 2000) || null, `items:${itemId}:details`),
+      forP?.id ?? null,
+      byP?.id ?? null,
+      win ? win.start.toISOString() : null,
+      win ? win.end.toISOString() : null,
+      win?.dueAt ? win.dueAt.toISOString() : null,
+      cap.place_hint?.slice(0, 100) ?? null,
+      confidence,
+      rrule,
+      iso,
+      iso,
+    )
+    .run();
+
+  // Category: typed attributes, the thing it is about, triggers ("30 days before the warranty ends").
+  const cat = category(cap.subtype === "none" ? null : cap.subtype);
+  if (cat) {
+    const currency = (await getSetting(repo.db, "currency")) ?? "USD";
+    await applyCategory(repo, itemId, { subtype: cat.subtype, attrs: cap.attrs, thing: thing ? { name: thing.name, kind: thing.kind } : null, recurrence: rrule }, tz, currency);
+  }
+  // A plain task or note about an owned object ("change the AC filter") is still linked to it.
+  if (thing && !cat?.thing) await linkThing(repo, itemId, thing.id);
+  return itemId;
+}
+
+const REVERT_WINDOW_MS = 30 * 60_000;
+
+/**
+ * Undo a note that was added to an existing item: the item goes back as it was. With asNew, the note then becomes
+ * its own item from the same parse (no second model call).
+ */
+export async function revertUpdate(repo: Repo, req: Request, captureId: string, tz: string): Promise<Response> {
+  const body = await readJson<{ as_new?: unknown }>(req);
+  const now = new Date();
+  const ev = await repo.db
+    .prepare("SELECT id, item_id, payload_json FROM events WHERE type = 'update' AND json_extract(payload_json, '$.capture_id') = ? AND at >= ? LIMIT 1")
+    .bind(captureId, new Date(now.getTime() - REVERT_WINDOW_MS).toISOString())
+    .first<{ id: string; item_id: string; payload_json: string }>();
+  if (!ev) throw new HttpError(409, "nothing_to_undo", "Too late to undo.");
+  const prev = (JSON.parse(ev.payload_json) as { prev: Record<string, string | null> }).prev;
+  await repo.db
+    .prepare(`UPDATE items SET ${UPDATE_COLUMNS.map((c) => `${c} = ?`).join(", ")}, updated_at = ? WHERE id = ?`)
+    .bind(...UPDATE_COLUMNS.map((c) => prev[c] ?? null), now.toISOString(), ev.item_id)
+    .run();
+  await repo.db.prepare("UPDATE events SET type = 'update_undone' WHERE id = ?").bind(ev.id).run();
+  let itemId = ev.item_id;
+  if (body.as_new === true) {
+    const c = await repo.db.prepare("SELECT raw_text_enc, parse_enc FROM captures WHERE id = ?").bind(captureId).first<{ raw_text_enc: string; parse_enc: string | null }>();
+    if (!c) throw new HttpError(404, "not_found");
+    const text = await repo.cipher.decrypt(c.raw_text_enc, `captures:${captureId}:raw_text`);
+    const parsed = c.parse_enc ? (JSON.parse(await repo.cipher.decrypt(c.parse_enc, `captures:${captureId}:parse`)) as ParseOutput) : null;
+    const cap: CaptureOut = parsed?.capture ?? {
+      kind: "note", title: text.slice(0, 80), details: text.length > 80 ? text : null, for_person: null, requested_by: null,
+      when: { type: "none", date: null, end_date: null, unit: null, offset: null, weekday: null, time: null }, place_hint: null, confidence: 0,
+      subtype: "none", attrs: [], thing: null, recurrence: null, facts: [], missing: [], update: null, update_done: false, also: [],
+    };
+    const thing = cap.thing?.name ? await resolveThing(repo, await things(repo), cap.thing.name, cap.thing.kind) : null;
+    itemId = await insertItem(repo, { captureId, cap, text, now, tz, people: await repo.people(), thing });
+    // Search now points the note at its own item.
+    await repo.db.prepare("UPDATE capture_vectors SET item_id = ? WHERE capture_id = ?").bind(itemId, captureId).run();
+    if (repo.env.VECTORIZE) {
+      try {
+        await storeVector(repo.env, captureId, itemId, now.toISOString(), await embed(repo.env, text));
+      } catch (e) {
+        console.warn("re-embed failed", e instanceof Error ? e.message : e);
+      }
+    }
+  }
+  const row = (await repo.getItemRow(itemId))!;
+  return json({ item: (await repo.itemViews([row]))[0] });
 }
 
 function toAnswerItems(views: Awaited<ReturnType<Repo["itemViews"]>>, tz: string): AnswerItem[] {
