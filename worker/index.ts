@@ -4,7 +4,7 @@ import { Cipher } from "./lib/crypto";
 import { HttpError, errorResponse, json } from "./lib/http";
 import { getSettingsMap, reminderSettings } from "./lib/settings";
 import { Repo } from "./repo";
-import { handleCapture } from "./routes/capture";
+import { handleCapture, revertUpdate } from "./routes/capture";
 import { actOnItem, deleteItem, getItem, listItems, patchItem } from "./routes/items";
 import {
   exportAll,
@@ -89,6 +89,7 @@ async function api(req: Request, env: Env): Promise<Response> {
   let mm: RegExpMatchArray | null;
 
   if (path === "/api/capture" && m === "POST") return handleCapture(repo, req, rs.tz);
+  if ((mm = path.match(new RegExp(`^/api/captures/${ID}/revert-update$`))) && m === "POST") return revertUpdate(repo, req, mm[1], rs.tz);
   if (path === "/api/transcribe" && m === "POST") return transcribeAudio(repo, req);
   if (path === "/api/items" && m === "GET") return listItems(repo, url);
   if ((mm = path.match(new RegExp(`^/api/items/${ID}$`)))) {

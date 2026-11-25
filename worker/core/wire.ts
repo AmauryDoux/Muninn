@@ -67,6 +67,9 @@ const WireCapture = z.object({
       }),
     )
     .describe("At most 2 facts that the task needs and the text does not give."),
+  // Plain string and boolean, no enum or object: keeps the compiled grammar small.
+  update: z.string().describe('Ref of the open item this note is about, from the open items list, when the note reports progress on it or finishes it; else "".'),
+  update_done: z.boolean().describe("True only when the note says that open item is finished."),
   // Kept deliberately small: the full per-item shape (people, TimeRef, place) pushed the request past the
   // API's compiled-grammar size limit and every parse failed. Extra items carry a title, a name and a resolved date.
   also: z
@@ -160,6 +163,8 @@ export function toParseOutput(w: WireParse): ParseOutput {
               },
         facts: c.facts.map((f) => ({ subject: f.about_thing ? null : mention(f.subject), about_thing: f.about_thing, key: f.key, value: f.value })),
         missing: c.missing.map((m) => ({ subject: name(m.who), key: m.key, question: m.question })),
+        update: str(c.update),
+        update_done: !!c.update_done && !!str(c.update),
         also: (c.also ?? [])
           .filter((a) => str(a.title))
           .slice(0, 5)

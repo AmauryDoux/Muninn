@@ -200,7 +200,21 @@ export function CaptureBox({ people, onCaptured }: { people: Person[]; onCapture
               The AI could not read this ({result.ai_error}), so it was saved as a plain note. Check Settings → AI usage.
             </p>
           )}
-          {result?.type === "capture" && (
+          {result?.type === "capture" && result.updated && result.capture_id && (
+            <UpdatedCard
+              key={`u-${result.capture_id}`}
+              item={result.item}
+              captureId={result.capture_id}
+              done={result.updated.done}
+              onDone={close}
+              onNewItem={(item) => {
+                setResult({ type: "capture", item, also: [], question: null });
+                onCaptured();
+              }}
+              onChanged={onCaptured}
+            />
+          )}
+          {result?.type === "capture" && !result.updated && (
             <ConfirmCard key={result.item.id} item={result.item} question={result.question} people={people} onDone={close} onChanged={onCaptured} />
           )}
           {result?.type === "capture" && !!result.also?.length && (
@@ -312,6 +326,69 @@ type Field = "title" | "for" | "by" | "when" | "place" | null;
 
 /** The confirmation line: one chip per field, tap to fix. Saves itself after 5 seconds of no interaction. */
 export const AUTO_DISMISS_MS = 6000;
+
+/** The note was added to an existing item: say which, and offer to make it a new item or undo. */
+function UpdatedCard({
+  item,
+  captureId,
+  done,
+  onDone,
+  onNewItem,
+  onChanged,
+}: {
+  item: Item;
+  captureId: string;
+  done: boolean;
+  onDone: () => void;
+  onNewItem: (item: Item) => void;
+  onChanged: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const doneRef = useRef(onDone);
+  useEffect(() => {
+    doneRef.current = onDone;
+  }, [onDone]);
+  useEffect(() => {
+    if (busy || err) return;
+    // Longer than a plain save: this changed something that already existed.
+    const t = setTimeout(() => doneRef.current(), AUTO_DISMISS_MS * 2);
+    return () => clearTimeout(t);
+  }, [busy, err]);
+  async function revert(asNew: boolean) {
+    setBusy(true);
+    try {
+      const r = await api<{ item: Item }>(`/api/captures/${captureId}/revert-update`, { body: { as_new: asNew } });
+      onChanged();
+      if (asNew) onNewItem(r.item);
+      else onDone();
+    } catch (e) {
+      setErr(errText(e));
+      setBusy(false);
+    }
+  }
+  return (
+    <div className="card confirm gold">
+      <p className="small muted">
+        <Icon name="check" size={14} className="tone-ok" /> {done ? "Marked done" : "Added to"}
+      </p>
+      <p>
+        <a href={`#/item/${item.id}`} onClick={onDone}>
+          <b>{item.title}</b>
+        </a>
+      </p>
+      <div className="row">
+        <button className="btn ghost small" disabled={busy} onClick={() => revert(true)}>
+          Make it a new item instead
+        </button>
+        <button className="btn ghost small" disabled={busy} onClick={() => revert(false)}>
+          Undo
+        </button>
+      </div>
+      {err && <p className="error">{err}</p>}
+    </div>
+  );
+}
 
 export function ConfirmCard({
   item: initial,

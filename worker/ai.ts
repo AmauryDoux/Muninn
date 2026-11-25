@@ -62,6 +62,7 @@ Rules for capture:
 - facts: only durable facts stated in the text (sizes, models, allergies, preferences). Keys in snake_case.
 - missing: at most 2 facts the task clearly needs and the text does not give (e.g. bed_size when buying sheets for someone). Use the known facts list: never ask for a fact that is already known.
 - also: when one note holds several separate to-dos ("buy milk, call mom tomorrow and book the dentist"), the first goes in the main fields and each other one in also: a title that keeps any name ("Call mom"), who it is for, the day as YYYY-MM-DD resolved from today, and HH:MM if a time was said. Facts and categories stay on the main item. Empty for a single item.
+- update: when the note reports what the user did about one of the open items listed (bought the gift, booked the tickets, called the plumber) or finishes it, put that item's ref; set update_done when it is finished. Use the main fields as usual too. Only for the same task, person and occasion: a shared word ("gift", "car") is not enough, and when unsure leave "". A new, separate to-do is never an update.
 - confidence: lower it when the note is ambiguous.
 - subtype: pick the category that fits, written exactly as listed below, else "none". In recall, subtype is the category asked about, else "any". Fill attrs only with that subtype's keys:
 ${CATEGORIES.map((c) => `  ${c.subtype}: ${c.hint}. attrs: ${c.fields.map((f) => f.key + (f.type === "enum" ? `(${f.options!.join("|")})` : f.type === "date" ? "(YYYY-MM-DD)" : f.type === "money" ? "(e.g. 40 USD)" : "")).join(", ")}`).join("\n")}
@@ -86,6 +87,8 @@ export interface ParseContext {
   tz: string;
   people: { name: string; aliases: string[]; relation: string }[];
   knownFacts: { subject: string; key: string }[];
+  /** Open items that may be what the note is about: the model may name one by ref. */
+  openItems?: { ref: string; title: string; when: string | null; for: string | null }[];
 }
 
 export async function parseNote(env: Env, text: string, ctx: ParseContext): Promise<{ out: ParseOutput | null; model: string }> {
@@ -95,6 +98,7 @@ export async function parseNote(env: Env, text: string, ctx: ParseContext): Prom
     `Today: ${WEEKDAYS[p.weekday]} ${today}, ${String(p.hour).padStart(2, "0")}:${String(p.minute).padStart(2, "0")} (${ctx.tz}). Weeks start on Monday.`,
     `Known people: ${JSON.stringify(ctx.people)}`,
     `Known facts (subject, key): ${JSON.stringify(ctx.knownFacts.slice(0, 100))}`,
+    `Open items that may be related (ref, title, when, for): ${JSON.stringify(ctx.openItems ?? [])}`,
   ].join("\n");
   const model = env.PARSE_MODEL;
   const res = await (await client(env)).messages.parse({

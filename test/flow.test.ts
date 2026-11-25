@@ -44,7 +44,7 @@ vi.mock("@anthropic-ai/sdk", () => {
   return { default: FakeAnthropic, Anthropic: FakeAnthropic, APIError };
 });
 
-const { handleCapture } = await import("../worker/routes/capture");
+const { handleCapture, relatedOpenItems, revertUpdate } = await import("../worker/routes/capture");
 
 const TZ = "America/Chicago";
 const KEY = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64url");
@@ -59,7 +59,7 @@ const capture = (c: Record<string, unknown>) => ({
   recall: null,
   capture: {
     kind: "note", title: "", details: "", for_person: none, requested_by: none, when: noTime, place_hint: "", confidence: 0.9, subtype: "none", attrs: [],
-    thing_name: "", thing_kind: "", repeat: "none", repeat_interval: 1, repeat_months: [], repeat_weekdays: [], facts: [], missing: [],
+    thing_name: "", thing_kind: "", repeat: "none", repeat_interval: 1, repeat_months: [], repeat_weekdays: [], facts: [], missing: [], update: "", update_done: false, also: [],
     ...c,
   },
 });
@@ -256,5 +256,95 @@ describe("when the parser fails", () => {
     expect(b.type).toBe("capture");
     expect(b.item.title).toBe("buy milk");
     expect(b.ai_error).toBeTruthy();
+  });
+});
+
+describe("a note about an existing item updates it", () => {
+  const count = async () => (await repo.db.prepare("SELECT COUNT(*) AS n FROM items").first<{ n: number }>())!.n;
+  const details = async (id: string) => repo.cipher.decryptNullable((await repo.getItemRow(id))!.details_enc, `items:${id}:details`);
+  const revert = async (captureId: string, asNew: boolean) =>
+    (await revertUpdate(repo, new Request("https://m.test/x", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ as_new: asNew }) }), captureId, TZ)).json() as Promise<Record<string, any>>;
+  let giftId = "";
+  beforeEach(async () => {
+    reply = () => capture({ kind: "task", title: "Gift for wife's birthday", for_person: { mention: "wife", relation: "wife" }, when: { ...noTime, type: "date", date: "2099-12-01" } });
+    giftId = (await send("find a gift for my wife's birthday on 1 Dec")).item.id;
+  });
+
+  it("offers open items to the model and adds the note to the one it picks", async () => {
+    let offered = "";
+    reply = (r) => {
+      offered = r.messages[0].content;
+      return capture({ kind: "note", title: "Bought necklace", update: "1" });
+    };
+    const b = await send("bought her the silver necklace for the birthday");
+    expect(offered).toMatch(/Open items that may be related.*"ref":"1","title":"Gift for wife's birthday"/);
+    expect(b.updated).toEqual({ item_id: giftId, done: false });
+    expect(b.item.id).toBe(giftId);
+    expect(b.item.status).toBe("open");
+    expect(await details(giftId)).toMatch(/: bought her the silver necklace/);
+    expect(await count()).toBe(1);
+  });
+
+  it("closes the item when the note says it is finished", async () => {
+    reply = () => capture({ kind: "note", title: "Gift done", update: "1", update_done: true });
+    const b = await send("wife's gift is sorted, wrapped and hidden");
+    expect(b.item.status).toBe("done");
+  });
+
+  it("an unrelated note makes a new item, even when the model is offered the open ones", async () => {
+    reply = () => capture({ kind: "task", title: "Buy milk", update: "" });
+    const b = await send("buy milk");
+    expect(b.updated).toBeNull();
+    expect(b.item.id).not.toBe(giftId);
+    expect(await details(giftId)).toBeNull();
+    expect(await count()).toBe(2);
+  });
+
+  it("a ref that was not offered is ignored", async () => {
+    reply = () => capture({ kind: "task", title: "Call the bank", update: "7" });
+    const b = await send("call the bank");
+    expect(b.updated).toBeNull();
+    expect(await count()).toBe(2);
+  });
+
+  it("done items are not offered", async () => {
+    await repo.db.prepare("UPDATE items SET status = 'done'").run();
+    let offered = "";
+    reply = (r) => ((offered = r.messages[0].content), capture({ title: "x", update: "1" }));
+    const b = await send("bought the necklace for the birthday");
+    expect(offered).toContain("Open items that may be related (ref, title, when, for): []");
+    expect(b.updated).toBeNull();
+  });
+
+  it("undo puts the item back; 'make it a new item' also creates one from the same parse", async () => {
+    reply = () => capture({ kind: "note", title: "Bought necklace", update: "1", update_done: true });
+    const first = await send("bought the necklace");
+    const undone = await revert(first.capture_id, false);
+    expect(undone.item).toMatchObject({ id: giftId, status: "open" });
+    expect(await details(giftId)).toBeNull();
+    expect(await count()).toBe(1);
+    await expect(revert(first.capture_id, false)).rejects.toThrow();
+
+    const second = await send("bought the necklace");
+    const calls0 = calls.length;
+    const made = await revert(second.capture_id, true);
+    expect(calls.length).toBe(calls0); // no second model call
+    expect(made.item.title).toBe("Bought necklace");
+    expect(made.item.id).not.toBe(giftId);
+    expect(await count()).toBe(2);
+    expect((await repo.getItemRow(giftId))!.status).toBe("open");
+  });
+
+  it("without an embedding, titles sharing a meaningful word are still offered", async () => {
+    expect((await relatedOpenItems(repo, "got the birthday present", null)).map((r) => r.row.id)).toEqual([giftId]);
+    expect(await relatedOpenItems(repo, "buy milk", null)).toEqual([]);
+    expect(await relatedOpenItems(repo, "what about this", null)).toEqual([]);
+  });
+
+  it("a capture-only key (Shortcuts) never updates", async () => {
+    reply = () => capture({ kind: "note", title: "Bought necklace", update: "1" });
+    const b = await (await handleCapture(repo, req("bought the necklace"), TZ, { captureOnly: true })).json() as Record<string, any>;
+    expect(b.updated).toBeNull();
+    expect(await count()).toBe(2);
   });
 });
