@@ -110,8 +110,27 @@ const Intent = z
 export const WireCaptureParseSchema = z.object({ intent: Intent, capture: WireCapture.nullable() });
 /** Second call, only when the first said recall. */
 export const WireRecallSchema = z.object({ recall: WireRecall });
+/**
+ * Last resort when the API refuses the capture schema itself (400 "compiled grammar is too large" or "too complex"):
+ * a tiny schema that cannot come near those limits, so a note still gets a title, a kind and a date instead of
+ * being saved raw. Questions still go on to the recall call.
+ */
+export const WireLiteSchema = z.object({
+  intent: Intent,
+  kind: z.enum(["task", "note", "event"]),
+  title: z.string().describe("Short imperative or noun phrase, 2-8 words."),
+  date: z.string().describe('YYYY-MM-DD when a day was said (resolve "tomorrow", "Friday" from today), else "".'),
+  time: z.string().describe('HH:MM 24h if a time was said, else "".'),
+});
 /** Every schema sent for parsing, for the size test and `npm run check:ai`. */
-export const PARSE_SCHEMAS = { parse_capture: WireCaptureParseSchema, parse_recall: WireRecallSchema } as const;
+export const PARSE_SCHEMAS = { parse_capture: WireCaptureParseSchema, parse_recall: WireRecallSchema, parse_lite: WireLiteSchema } as const;
+
+export function liteCapture(w: z.infer<typeof WireLiteSchema>): CaptureOut {
+  return {
+    kind: w.kind, title: w.title.trim(), details: null, for_person: null, requested_by: null, when: alsoWhen(w.date, w.time), place_hint: null,
+    confidence: 0.5, subtype: "none", attrs: [], thing: null, recurrence: null, facts: [], missing: [], update: null, update_done: false, also: [],
+  };
+}
 
 export type WireParse = {
   intent: z.infer<typeof Intent>;

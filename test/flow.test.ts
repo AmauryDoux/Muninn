@@ -11,6 +11,8 @@ import { makeD1 } from "./d1-shim";
 type Req = { model: string; max_tokens: number; system?: string; thinking?: { type: string }; output_config?: { format?: { schema: unknown } }; messages: { content: string }[] };
 const calls: Req[] = [];
 let reply: (r: Req) => unknown = () => null;
+// Lower it to make the fake API refuse bigger schemas, like the real one's unpublished grammar limit.
+let grammarLimitChars = Infinity;
 
 vi.mock("@anthropic-ai/sdk", () => {
   class APIError extends Error {
@@ -27,7 +29,8 @@ vi.mock("@anthropic-ai/sdk", () => {
         if (c.unions > SCHEMA_LIMITS.unions || c.optional > SCHEMA_LIMITS.optional) throw new APIError(400, "Schema is too complex for compilation.");
         if (r.output_config?.format) {
           const g = grammarSize(r.output_config.format.schema);
-          if (g.chars > GRAMMAR_BUDGET.chars || g.enumValues > GRAMMAR_BUDGET.enumValues || g.objects > GRAMMAR_BUDGET.objects) throw new APIError(400, "The compiled grammar is too large.");
+          if (g.chars > GRAMMAR_BUDGET.chars || g.enumValues > GRAMMAR_BUDGET.enumValues || g.objects > GRAMMAR_BUDGET.objects || g.chars > grammarLimitChars)
+            throw new APIError(400, "The compiled grammar is too large, which would cause performance issues.");
         }
         if (r.model.startsWith("claude-haiku") && r.thinking?.type !== "disabled") throw new Error("test: Haiku calls should disable thinking");
         if (r.model.startsWith("claude-sonnet-5-5") && r.thinking?.type === "disabled") throw new APIError(400, "thinking disabled is not supported");
@@ -66,6 +69,7 @@ const capture = (c: Record<string, unknown>) => ({
 
 beforeEach(async () => {
   calls.length = 0;
+  grammarLimitChars = Infinity;
   const vec = Array.from({ length: 768 }, (_, i) => Math.sin(i));
   const env = {
     DB: makeD1(),
@@ -247,7 +251,7 @@ describe("when the parser fails", () => {
   it("a question is answered from the open list, not saved as a to-do", async () => {
     reply = () => capture({ kind: "task", title: "Pick up prescription", when: { ...noTime, type: "relative", unit: "day", offset: 0 } });
     await send("pick up prescription today");
-    reply = (r) => (r.system?.startsWith("You turn") ? grammarError() : { answer: "Pick up your prescription.", cited_ids: [...r.messages[0].content.matchAll(/"id":"([^"]+)"/g)].map((m) => m[1]) });
+    reply = (r) => (r.system?.startsWith("You turn") || r.system?.startsWith("You read") ? grammarError() : { answer: "Pick up your prescription.", cited_ids: [...r.messages[0].content.matchAll(/"id":"([^"]+)"/g)].map((m) => m[1]) });
     for (const q of ["What have I got to do today", "Have I got any upcoming things on my calendar?"]) {
       const b = await send(q);
       expect(b.type).toBe("answer");
@@ -352,5 +356,29 @@ describe("a note about an existing item updates it", () => {
     const b = await (await handleCapture(repo, req("bought the necklace"), TZ, { captureOnly: true })).json() as Record<string, any>;
     expect(b.updated).toBeNull();
     expect(await count()).toBe(2);
+  });
+});
+
+describe("when the API refuses the capture schema itself", () => {
+  it("the note is still read, with the tiny schema, and the error is recorded", async () => {
+    grammarLimitChars = 1500;
+    reply = (r) => (r.system?.startsWith("You read one short note") ? { intent: "capture", kind: "task", title: "Dentist", date: "2099-03-11", time: "15:00" } : grammarLimitChars);
+    const b = await send("dentist on 11 March 2099 at 3pm");
+    expect(b.ai_error).toBeNull();
+    expect(b.item).toMatchObject({ title: "Dentist", kind: "task" });
+    expect(b.item.due_at).toBeTruthy();
+    const err = await repo.db.prepare("SELECT payload_json FROM events WHERE type = 'model_error'").first<{ payload_json: string }>();
+    expect(err?.payload_json).toMatch(/grammar/);
+  });
+  it("a question still gets answered", async () => {
+    grammarLimitChars = 1500;
+    reply = (r) =>
+      r.system?.startsWith("You read one short note")
+        ? { intent: "recall", kind: "note", title: "", date: "", time: "" }
+        : r.system?.startsWith("You turn one question")
+          ? { recall: { mode: "filter", requested_by: "", for_person: "", created: noTime, scheduled: noTime, status: "open", kind: "any", subtype: "any", topic: "" } }
+          : { answer: "Nothing yet.", cited_ids: [] };
+    const b = await send("what do I have to do?");
+    expect(b.type).toBe("answer");
   });
 });

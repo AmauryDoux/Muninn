@@ -46,7 +46,8 @@ You need a Cloudflare account (free plan) and an Anthropic API key. Everything b
 4. **Create tables and deploy**
    ```bash
    npm run db:migrate:remote
-   ANTHROPIC_API_KEY=sk-ant-... npm run deploy   # checks the AI schemas against the API first
+   read -s ANTHROPIC_API_KEY && export ANTHROPIC_API_KEY   # same key as the secret above; not echoed or saved in history
+   npm run deploy                                          # checks the AI schemas against the API first
    ```
 5. **Set up on your phone.** Open the `*.workers.dev` URL in Safari, Share → Add to Home Screen, open Muninn from the Home Screen, enter the setup code, pick a username and password (8+ characters with upper, lower, number and symbol), add a passkey, then Settings → Turn on reminders. The setup route closes for good after the first success.
 
@@ -60,7 +61,7 @@ Recommended hardening:
 git pull
 npm ci
 npm run db:migrate:remote   # only when migrations/ changed
-export ANTHROPIC_API_KEY=sk-ant-...   # same key as the Worker secret; used by the check below
+read -s ANTHROPIC_API_KEY && export ANTHROPIC_API_KEY   # paste the Worker's key; not echoed, not saved in history
 npm run deploy
 ```
 `npm run deploy` first runs `npm run check:ai`: it sends every AI schema to the API with a one-word prompt (a fraction of a cent) and stops the deploy if the API refuses one, for example "The compiled grammar is too large", whose limit isn't published. `SKIP_AI_CHECK=1 npm run deploy` skips it. The GitHub deploy job runs the same check with the `ANTHROPIC_API_KEY` secret.

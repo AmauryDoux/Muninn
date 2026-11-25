@@ -2,7 +2,8 @@
 // API refuses (e.g. 400 "The compiled grammar is too large", whose limit is not published) fails here, before
 // `wrangler deploy`, instead of breaking every capture in production. Costs a fraction of a cent.
 //
-//   ANTHROPIC_API_KEY=sk-ant-... npm run check:ai
+//   read -s ANTHROPIC_API_KEY && export ANTHROPIC_API_KEY   # prompts without echo, stays out of shell history
+//   npm run check:ai
 //
 // Runs before `npm run deploy` (predeploy). SKIP_AI_CHECK=1 skips it, for a deploy without network or key.
 import { build } from "esbuild";
@@ -58,6 +59,7 @@ const client = new m.Anthropic({ apiKey: key, maxRetries: 1, timeout: 60_000 });
 const checks = [
   ["parse (capture)", parseModel, m.PARSE_SCHEMAS.parse_capture],
   ["parse (recall)", parseModel, m.PARSE_SCHEMAS.parse_recall],
+  ["parse (lite fallback)", parseModel, m.PARSE_SCHEMAS.parse_lite],
   ["answer", parseModel, m.AnswerSchema],
   ["tips", parseModel, m.TipWordingSchema],
   ["advice", adviceModel, m.AdviceSchema],
