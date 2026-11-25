@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { AdviceSchema, AnswerSchema, ParseSchema, TipWordingSchema } from "../worker/core/schema";
-import { SCHEMA_LIMITS, schemaComplexity, toParseOutput, WireParseSchema } from "../worker/core/wire";
+import { z } from "zod";
+import { GRAMMAR_BUDGET, grammarSize, SCHEMA_LIMITS, schemaComplexity, toParseOutput, WireParseSchema } from "../worker/core/wire";
 
 const jsonOf = (s: unknown) => (zodOutputFormat(s as never) as unknown as { schema: unknown }).schema;
 
@@ -15,6 +16,21 @@ describe("structured-output limits", () => {
       expect(c.optional).toBeLessThanOrEqual(SCHEMA_LIMITS.optional);
     });
   }
+  // A third limit, undocumented as a number: "The compiled grammar is too large" (HTTP 400). Splitting notes added
+  // per-item people and times and pushed the parse schema over it; every capture failed in production. The schema
+  // before that change (4,444 chars with $refs expanded, 83 enum values, 15 objects) worked; the failing one was
+  // 5,445 / 96 / 19. These budgets stay below the known-good schema so a new field has to make room first.
+  it("parse stays below the compiled-grammar size that is known to work", () => {
+    const g = grammarSize(jsonOf(WireParseSchema));
+    expect(g.chars).toBeLessThanOrEqual(GRAMMAR_BUDGET.chars);
+    expect(g.enumValues).toBeLessThanOrEqual(GRAMMAR_BUDGET.enumValues);
+    expect(g.objects).toBeLessThanOrEqual(GRAMMAR_BUDGET.objects);
+  });
+  it("the grammar measure flags the schema that failed in production", () => {
+    const failing = z.object({ ...WireParseSchema.shape, extra: z.array(z.object({ a: z.object({ b: z.string(), c: z.string() }), d: z.enum(["x", "y", "z"]), e: z.object({ f: z.enum(["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15"]) }) })) });
+    const g = grammarSize(jsonOf(failing));
+    expect(g.chars > GRAMMAR_BUDGET.chars || g.enumValues > GRAMMAR_BUDGET.enumValues || g.objects > GRAMMAR_BUDGET.objects).toBe(true);
+  });
   it("the internal schema would not fit (why the wire schema exists)", () => {
     expect(schemaComplexity(jsonOf(ParseSchema)).unions).toBeGreaterThan(SCHEMA_LIMITS.unions);
   });
@@ -66,7 +82,7 @@ describe("toParseOutput", () => {
     const out = toParseOutput({
       intent: "recall",
       capture: null,
-      recall: { mode: "filter", requested_by: { mention: "wife", relation: "" }, for_person: blankMention, created: { ...noTime, type: "relative", unit: "week", offset: -2 }, scheduled: noTime, status: "any", kind: "any", subtype: "any", topic: "" },
+      recall: { mode: "filter", requested_by: "wife", for_person: "", created: { ...noTime, type: "relative", unit: "week", offset: -2 }, scheduled: noTime, status: "any", kind: "any", subtype: "any", topic: "" },
     });
     expect(out.recall).toMatchObject({ requested_by: { mention: "wife", relation: null }, for_person: null, topic: null, created: { type: "relative", unit: "week", offset: -2 } });
   });

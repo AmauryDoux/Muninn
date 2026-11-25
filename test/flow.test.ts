@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "../worker/env";
 import { Cipher } from "../worker/lib/crypto";
 import { Repo } from "../worker/repo";
-import { SCHEMA_LIMITS, schemaComplexity } from "../worker/core/wire";
+import { GRAMMAR_BUDGET, grammarSize, SCHEMA_LIMITS, schemaComplexity } from "../worker/core/wire";
 import { makeD1 } from "./d1-shim";
 
 type Req = { model: string; max_tokens: number; system?: string; thinking?: { type: string }; output_config?: { format?: { schema: unknown } }; messages: { content: string }[] };
@@ -25,6 +25,10 @@ vi.mock("@anthropic-ai/sdk", () => {
         calls.push(r);
         const c = r.output_config?.format ? schemaComplexity(r.output_config.format.schema) : { unions: 0, optional: 0 };
         if (c.unions > SCHEMA_LIMITS.unions || c.optional > SCHEMA_LIMITS.optional) throw new APIError(400, "Schema is too complex for compilation.");
+        if (r.output_config?.format) {
+          const g = grammarSize(r.output_config.format.schema);
+          if (g.chars > GRAMMAR_BUDGET.chars || g.enumValues > GRAMMAR_BUDGET.enumValues || g.objects > GRAMMAR_BUDGET.objects) throw new APIError(400, "The compiled grammar is too large.");
+        }
         if (r.model.startsWith("claude-haiku") && r.thinking?.type !== "disabled") throw new Error("test: Haiku calls should disable thinking");
         if (r.model.startsWith("claude-sonnet-5-5") && r.thinking?.type === "disabled") throw new APIError(400, "thinking disabled is not supported");
         const out = reply(r);
@@ -112,7 +116,7 @@ describe("ask", () => {
     await send("Emma wants the blue Lego set");
     reply = (r) => {
       if (r.system?.startsWith("You turn")) {
-        return { intent: "recall", capture: null, recall: { mode: "filter", requested_by: none, for_person: { mention: "Emma", relation: "" }, created: noTime, scheduled: noTime, status: "open", kind: "any", subtype: "gift_idea", topic: "" } };
+        return { intent: "recall", capture: null, recall: { mode: "filter", requested_by: "", for_person: "Emma", created: noTime, scheduled: noTime, status: "open", kind: "any", subtype: "gift_idea", topic: "" } };
       }
       const ids = [...r.messages[0].content.matchAll(/"id":"([^"]+)"/g)].map((m) => m[1]);
       return { answer: "Emma wants the blue Lego set.", cited_ids: ids };
@@ -209,8 +213,8 @@ describe("several to-dos in one note", () => {
         kind: "task",
         title: "Buy milk",
         also: [
-          { kind: "task", title: "Call mom", for_person: { mention: "mom", relation: "mother" }, requested_by: none, when: { ...noTime, type: "relative", unit: "day", offset: 1 }, place_hint: "" },
-          { kind: "task", title: "Book the dentist", for_person: none, requested_by: none, when: noTime, place_hint: "" },
+          { title: "Call mom", who: "mom", date: "2099-03-11", time: "" },
+          { title: "Book the dentist", who: "", date: "", time: "" },
         ],
       });
     const b = await send("buy milk, call mom tomorrow and book the dentist");
@@ -220,5 +224,28 @@ describe("several to-dos in one note", () => {
     expect(b.also[0].window_start).toBeTruthy();
     const n = await repo.db.prepare("SELECT COUNT(*) AS n FROM items").first<{ n: number }>();
     expect(n!.n).toBe(3);
+  });
+});
+
+describe("when the parser fails", () => {
+  const grammarError = () => Object.assign(new Error("The compiled grammar is too large"), { status: 400 });
+  it("a question is answered from the open list, not saved as a to-do", async () => {
+    reply = () => capture({ kind: "task", title: "Pick up prescription", when: { ...noTime, type: "relative", unit: "day", offset: 0 } });
+    await send("pick up prescription today");
+    reply = (r) => (r.system?.startsWith("You turn") ? grammarError() : { answer: "Pick up your prescription.", cited_ids: [...r.messages[0].content.matchAll(/"id":"([^"]+)"/g)].map((m) => m[1]) });
+    for (const q of ["What have I got to do today", "Have I got any upcoming things on my calendar?"]) {
+      const b = await send(q);
+      expect(b.type).toBe("answer");
+      expect(b.ai_error).toBeTruthy();
+    }
+    const n = await repo.db.prepare("SELECT COUNT(*) AS n FROM items").first<{ n: number }>();
+    expect(n!.n).toBe(1);
+  });
+  it("a note is still saved as-is", async () => {
+    reply = () => grammarError();
+    const b = await send("buy milk");
+    expect(b.type).toBe("capture");
+    expect(b.item.title).toBe("buy milk");
+    expect(b.ai_error).toBeTruthy();
   });
 });
