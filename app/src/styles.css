@@ -179,7 +179,7 @@ h2 { font-size: 22px; font-weight: 750; letter-spacing: -0.01em; margin: 18px 0 
   background: var(--surface); border: 1px solid var(--stroke); border-radius: var(--radius);
   padding: 16px; margin: 10px 0;
   -webkit-backdrop-filter: blur(20px) saturate(160%); backdrop-filter: blur(20px) saturate(160%);
-  animation: rise 0.28s ease-out both;
+  animation: rise 0.28s ease-out backwards;
 }
 .card.tight { padding: 6px 0; }
 .card.hero {
@@ -253,7 +253,7 @@ form { display: flex; flex-direction: column; gap: 12px; margin: 0; }
 
 /* ---------- lists ---------- */
 ul.list { list-style: none; padding: 0; margin: 0; }
-.list-card { background: var(--surface); border: 1px solid var(--stroke); border-radius: var(--radius); overflow: hidden; animation: rise 0.28s ease-out both; }
+.list-card { background: var(--surface); border: 1px solid var(--stroke); border-radius: var(--radius); overflow: hidden; animation: rise 0.28s ease-out backwards; }
 .irow { display: flex; align-items: center; gap: 12px; padding: 12px 14px; min-height: 60px; position: relative; }
 .irow + .irow { border-top: 1px solid var(--stroke); }
 .irow .body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; color: inherit; }

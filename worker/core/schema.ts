@@ -14,7 +14,7 @@ export const TimeRefSchema = z.object({
   type: z.enum(["none", "date", "range", "relative", "weekday"]),
   date: z.string().nullable().describe("YYYY-MM-DD. For type=date the day; for type=range the first day."),
   end_date: z.string().nullable().describe("YYYY-MM-DD, last day of a range (inclusive)."),
-  unit: z.enum(["day", "week", "weekend", "month"]).nullable().describe("For type=relative."),
+  unit: z.enum(["minute", "hour", "day", "week", "weekend", "month"]).nullable().describe("For type=relative."),
   offset: z
     .number()
     .int()

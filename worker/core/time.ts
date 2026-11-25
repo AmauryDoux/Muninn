@@ -119,7 +119,7 @@ export interface TimeRef {
   /** type=range: end date, inclusive. */
   end_date?: string | null;
   /** type=relative: calendar unit. */
-  unit?: "day" | "week" | "weekend" | "month" | null;
+  unit?: "minute" | "hour" | "day" | "week" | "weekend" | "month" | null;
   /** type=relative: 0 = this, 1 = next, -1 = last, -2 = two ago. type=weekday: 0 = the coming one (today counts), 1 = the one after. */
   offset?: number | null;
   /** type=weekday: 0 = Sunday ... 6 = Saturday. */
@@ -159,7 +159,17 @@ export function resolveTimeRef(ref: TimeRef | null | undefined, now: Date, tz: s
   let a: CivilDate | null = null;
   let b: CivilDate | null = null;
   const offset = Math.trunc(ref.offset ?? 0);
-  if (Math.abs(offset) > 520) return null; // ten years of weeks; anything bigger is nonsense
+  if (Math.abs(offset) > 520 && ref.type !== "relative") return null; // ten years of weeks; anything bigger is nonsense
+
+  // "in 5 minutes", "in 2 hours": an exact moment from now, computed here rather than by the model.
+  if (ref.type === "relative" && (ref.unit === "minute" || ref.unit === "hour")) {
+    const mins = ref.unit === "hour" ? offset * 60 : offset;
+    if (mins <= 0 || mins > 7 * 24 * 60) return null;
+    const dueAt = new Date(Math.ceil((now.getTime() + mins * 60_000) / 60_000) * 60_000);
+    const day = civilOf(dueAt, tz);
+    return { startDate: civilToIso(day), endDate: civilToIso(day), start: dueAt, end: startOfLocalDay(addDays(day, 1), tz), dueAt };
+  }
+  if (Math.abs(offset) > 520) return null;
 
   switch (ref.type) {
     case "date":

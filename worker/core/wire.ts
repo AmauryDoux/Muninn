@@ -21,8 +21,8 @@ const TimeRef = z.object({
   type: z.enum(["none", "date", "range", "relative", "weekday"]),
   date: z.string().describe('YYYY-MM-DD for type=date (the day) or range (first day); "" otherwise.'),
   end_date: z.string().describe('YYYY-MM-DD, last day of a range (inclusive); "" otherwise.'),
-  unit: z.enum(["none", "day", "week", "weekend", "month"]).describe("For type=relative; none otherwise."),
-  offset: z.number().int().describe("type=relative: 0 this, 1 next, -1 last (days for unit=day). type=weekday: 0 the coming one, 1 the one after. 0 otherwise."),
+  unit: z.enum(["none", "minute", "hour", "day", "week", "weekend", "month"]).describe("For type=relative; none otherwise."),
+  offset: z.number().int().describe("type=relative: 0 this, 1 next, -1 last (days for unit=day, minutes or hours for those units). type=weekday: 0 the coming one, 1 the one after. 0 otherwise."),
   weekday: z.number().int().describe("type=weekday: 0=Sunday ... 6=Saturday. -1 otherwise."),
   time: z.string().describe('HH:MM 24h local time if one was given, else "".'),
 });

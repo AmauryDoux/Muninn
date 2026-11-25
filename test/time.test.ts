@@ -25,6 +25,30 @@ describe("resolveTimeRef", () => {
     expect(w.dueAt!.toISOString()).toBe("2026-11-24T14:30:00.000Z");
   });
 
+  it("in 5 minutes and in 2 hours are exact moments from now", () => {
+    const m = resolveTimeRef(ref({ unit: "minute", offset: 5 }), NOW, TZ)!;
+    expect(m.dueAt!.toISOString()).toBe("2026-11-23T09:05:00.000Z");
+    expect(m.start.toISOString()).toBe(m.dueAt!.toISOString());
+    expect(m.startDate).toBe("2026-11-23");
+    const h = resolveTimeRef(ref({ unit: "hour", offset: 2 }), NOW, TZ)!;
+    expect(h.dueAt!.toISOString()).toBe("2026-11-23T11:00:00.000Z");
+  });
+
+  it("in 3 hours late at night lands on the next local day", () => {
+    const late = zonedToUtc(2026, 11, 23, 23, 0, TZ);
+    const w = resolveTimeRef(ref({ unit: "hour", offset: 3 }), late, TZ)!;
+    expect(w.startDate).toBe("2026-11-24");
+    expect(w.dueAt!.toISOString()).toBe("2026-11-24T01:00:00.000Z");
+  });
+
+  it("rounds up to the next minute and rejects nonsense offsets", () => {
+    const w = resolveTimeRef(ref({ unit: "minute", offset: 5 }), new Date(NOW.getTime() + 20_000), TZ)!;
+    expect(w.dueAt!.toISOString()).toBe("2026-11-23T09:06:00.000Z");
+    expect(resolveTimeRef(ref({ unit: "minute", offset: 0 }), NOW, TZ)).toBeNull();
+    expect(resolveTimeRef(ref({ unit: "hour", offset: -1 }), NOW, TZ)).toBeNull();
+    expect(resolveTimeRef(ref({ unit: "hour", offset: 24 * 8 }), NOW, TZ)).toBeNull();
+  });
+
   it("this weekend and next weekend", () => {
     expect(resolveTimeRef(ref({ unit: "weekend", offset: 0 }), NOW, TZ)!.startDate).toBe("2026-11-28");
     expect(resolveTimeRef(ref({ unit: "weekend", offset: 1 }), NOW, TZ)!.endDate).toBe("2026-12-06");

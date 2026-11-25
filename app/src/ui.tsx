@@ -1,5 +1,6 @@
 // Small shared UI pieces: sheets, section headers, empty states, haptics.
 import { useEffect, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import type { Person } from "./api";
 import { Icon } from "./icons";
 
@@ -22,7 +23,9 @@ export function Sheet({ title, onClose, children }: { title?: string; onClose: (
       document.body.style.overflow = "";
     };
   }, [onClose]);
-  return (
+  // Rendered into <body>: inside a list card, a transformed, overflow-hidden ancestor trapped the "fixed" sheet in the
+  // card, clipped it, and left its backdrop blocking every tap on the screen.
+  return createPortal(
     <>
       <div className="sheet-backdrop" onClick={onClose} />
       <div className="sheet" role="dialog" aria-modal="true" aria-label={title}>
@@ -30,7 +33,8 @@ export function Sheet({ title, onClose, children }: { title?: string; onClose: (
         {title && <h3>{title}</h3>}
         {children}
       </div>
-    </>
+    </>,
+    document.body,
   );
 }
 
