@@ -14,11 +14,19 @@ export function fillConfig(text, env) {
     if (/["\\\n]/.test(v)) throw new Error(`${k} has characters that don't belong in it`);
     return v;
   };
-  let out = text.replace('"database_id": "00000000-0000-0000-0000-000000000000"', `"database_id": "${need("D1_DATABASE_ID")}"`);
-  out = out.replace('"VAPID_PUBLIC_KEY": ""', `"VAPID_PUBLIC_KEY": "${need("VAPID_PUBLIC_KEY")}"`);
-  if (env.VAPID_SUBJECT) out = out.replace(/"VAPID_SUBJECT": "[^"]*"/, `"VAPID_SUBJECT": "${need("VAPID_SUBJECT")}"`);
-  if (env.ENABLE_VECTORIZE === "true") out = out.replace('// "vectorize":', '"vectorize":');
-  if (env.ENABLE_BACKUPS === "true") out = out.replace('// "r2_buckets":', '"r2_buckets":');
+  // Replace whatever value is there (placeholder or an id filled in by hand), and fail loudly if a key is missing,
+  // rather than deploying a config that silently kept the placeholder.
+  const set = (s, key, value) => {
+    const re = new RegExp(`"${key}": "[^"]*"`);
+    if (!re.test(s)) throw new Error(`wrangler.jsonc has no "${key}" to fill`);
+    return s.replace(re, `"${key}": "${value}"`);
+  };
+  let out = set(text, "database_id", need("D1_DATABASE_ID"));
+  out = set(out, "VAPID_PUBLIC_KEY", need("VAPID_PUBLIC_KEY"));
+  if (env.VAPID_SUBJECT) out = set(out, "VAPID_SUBJECT", need("VAPID_SUBJECT"));
+  // Uncomment the optional bindings; already-uncommented ones are left as they are.
+  if (env.ENABLE_VECTORIZE === "true") out = out.replace(/\/\/\s*"vectorize":/, '"vectorize":');
+  if (env.ENABLE_BACKUPS === "true") out = out.replace(/\/\/\s*"r2_buckets":/, '"r2_buckets":');
   return out;
 }
 
