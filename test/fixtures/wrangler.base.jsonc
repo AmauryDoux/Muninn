@@ -1,0 +1,47 @@
+// Muninn: one Worker serves the PWA (static assets), the API (/api/*) and the cron.
+// No secret belongs in this file. Secrets are set with `wrangler secret put` (see README).
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "muninn",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-11-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "assets": {
+    "directory": "dist/client",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    // The Worker runs first only for the API, so it can enforce auth there.
+    "run_worker_first": ["/api/*"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "muninn",
+      // Replace with the id printed by `wrangler d1 create muninn`. Not a secret.
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "ai": { "binding": "AI" },
+  // Optional. Uncomment once Vectorize is confirmed free on your account
+  // (`wrangler vectorize create muninn-captures-v1 --dimensions=768 --metric=cosine`).
+  // Without it, recall uses brute-force cosine over vectors stored in D1.
+  // "vectorize": [{ "binding": "VECTORIZE", "index_name": "muninn-captures-v1" }],
+  // Optional weekly encrypted backup. Uncomment after `wrangler r2 bucket create muninn-backups`.
+  // "r2_buckets": [{ "binding": "BACKUPS", "bucket_name": "muninn-backups" }],
+  "triggers": { "crons": ["*/5 * * * *"] },
+  "vars": {
+    // Haiku 5.5 reads notes, answers recall questions and words the brief (cheap, high volume).
+    "PARSE_MODEL": "claude-haiku-5-5",
+    // Sonnet 5.5 for advice (low volume, needs judgment). Set to claude-haiku-5-5 to cut cost further.
+    "ADVICE_MODEL": "claude-sonnet-5-5",
+    "EMBED_MODEL": "@cf/baai/bge-base-en-v1.5",
+    "WHISPER_MODEL": "@cf/openai/whisper",
+    // Public half of the VAPID key pair (safe to commit once generated; the private half is a secret).
+    "VAPID_PUBLIC_KEY": "",
+    // Contact sent to push services in the VAPID JWT. Use a mailto: you are happy to expose to Apple/Google.
+    "VAPID_SUBJECT": "mailto:muninn@example.invalid"
+  },
+  "observability": { "enabled": true, "head_sampling_rate": 1 }
+}

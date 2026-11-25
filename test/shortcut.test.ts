@@ -19,7 +19,7 @@ vi.mock("@anthropic-ai/sdk", () => {
             ? {
                 intent: "recall",
                 capture: null,
-                recall: { mode: "semantic", topic: "secrets", requested_by: { mention: "", relation: "" }, for_person: { mention: "", relation: "" }, created: { type: "none", date: "", end_date: "", unit: "none", offset: 0, weekday: -1, time: "" }, scheduled: { type: "none", date: "", end_date: "", unit: "none", offset: 0, weekday: -1, time: "" }, status: "any", kind: "any", subtype: "any" },
+                recall: { mode: "semantic", topic: "secrets", requested_by: "", for_person: "", created: { type: "none", date: "", end_date: "", unit: "none", offset: 0, weekday: -1, time: "" }, scheduled: { type: "none", date: "", end_date: "", unit: "none", offset: 0, weekday: -1, time: "" }, status: "any", kind: "any", subtype: "any" },
               }
             : {
                 intent: "capture",
@@ -27,7 +27,7 @@ vi.mock("@anthropic-ai/sdk", () => {
                 capture: {
                   kind: "task", title: "Call mom", details: "", for_person: { mention: "", relation: "" }, requested_by: { mention: "", relation: "" },
                   when: { type: "none", date: "", end_date: "", unit: "none", offset: 0, weekday: -1, time: "" }, place_hint: "", confidence: 0.9, subtype: "none", attrs: [],
-                  thing_name: "", thing_kind: "", repeat: "none", repeat_interval: 1, repeat_months: [], repeat_weekdays: [], facts: [], missing: [],
+                  thing_name: "", thing_kind: "", repeat: "none", repeat_interval: 1, repeat_months: [], repeat_weekdays: [], facts: [], missing: [], also: [],
                 },
               },
       }),
