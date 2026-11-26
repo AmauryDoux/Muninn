@@ -486,3 +486,5 @@ ol.steps {
 .cal-day.sel { background: var(--surface-2); }
 .cal-day .dots { display: flex; gap: 3px; height: 6px; }
 .cal-day .dots i { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+.gc-h { margin: 18px 0 6px; }
+.gc-account { border-top: 1px solid var(--stroke); padding-top: 8px; margin-top: 8px; }

@@ -1,6 +1,7 @@
 // The one cron (every 5 minutes): reminders, morning brief, housekeeping, weekly backup.
 import type { Env } from "./env";
 import { holidayLine } from "./core/day";
+import { purgeGoogleStates, syncGoogle } from "./google";
 import { holidayMode, notableDays } from "./core/holidays";
 import type { CivilDate } from "./core/time";
 import { groupItems } from "./core/group";
@@ -46,6 +47,8 @@ export async function runScheduled(env: Env, now = new Date()): Promise<void> {
   if (at(6)) await job("tips", () => refreshTips(repo, now, rs.tz, true));
   if (p.weekday === 0 && at(18)) await job("review", () => weeklyReviewPush(repo, rs, now));
   if (p.minute < 5) await housekeeping(env, now);
+  if (p.minute < 5) await job("google-states", () => purgeGoogleStates(env.DB, repo.cipher, now));
+  await job("google", () => syncGoogle(env, repo.cipher, now));
   if (env.BACKUPS && p.weekday === 0 && p.hour === 3 && p.minute < 5) await job("backup", () => backup(repo, now));
   await job("vectors", () => maintainVectors(env, repo.cipher, (t) => embed(env, t)));
   // Heartbeat for the health view: a cron that stopped is otherwise invisible until a reminder is missed.

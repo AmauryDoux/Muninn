@@ -204,7 +204,7 @@ export function Settings({ onSignedOut }: { onSignedOut: () => void }) {
   );
 }
 
-function Toggle({ on, label, hint, onToggle }: { on: boolean; label: string; hint: string; onToggle: () => void }) {
+export function Toggle({ on, label, hint, onToggle }: { on: boolean; label: string; hint: string; onToggle: () => void }) {
   return (
     <div className="toggle">
       <div>

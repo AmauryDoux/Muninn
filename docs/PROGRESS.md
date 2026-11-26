@@ -1,5 +1,14 @@
 # Progress and decisions
 
+## 2026-11-26: Google Calendar, read-only
+
+- **Chosen by the user:** Google sign-in, read-only (over two-way sync or pasted secret iCal links). Scopes are `calendar.calendarlist.readonly` + `calendar.events.readonly` + `openid email`, narrower than `calendar.readonly` (no ACLs or settings).
+- **OAuth runs in the Worker** (authorization code + PKCE S256, client secret). The session cookie is SameSite=Strict, so it is not sent on Google's cross-site redirect to `/api/google/callback`; instead `POST /api/google/connect` (signed in, Origin-checked) stores a random `state` (hashed key, encrypted verifier, 10 minutes, deleted on first read). A replayed or forged callback finds no state.
+- **Migration 0005**: `google_accounts` (account recognised by HMAC of Google's `sub`), `google_calendars` (HMAC of account + calendar id), `calendar_events` (etag per event). Tokens, emails, calendar ids/names, titles and locations are encrypted.
+- **Sync writes only changes**: a hash of the calendar's etags skips unchanged calendars entirely; otherwise only new/changed events are upserted and missing ones deleted. This keeps D1 writes far below the free 100k/day. Window: 31 days back, 183 ahead, `singleEvents=true`; cancelled events and ones you declined are dropped. The cron spends at most 8 Google calls per run, oldest calendar first, so subrequests stay within the free plan's 50.
+- **`invalid_grant` marks the account revoked** (shown in Settings with "Link again") and it is not retried.
+- Backups include accounts and calendars (so a restore keeps the link) but not events; restored calendars are marked unsynced so they refetch.
+
 ## 2026-11-26: holidays, daily summary, calendar view
 
 - **Holidays are computed, not fetched** (`worker/core/holidays.ts`): the 11 US federal holidays with the 5 U.S.C. 6103 observed-day rule (Saturday to Friday, Sunday to Monday, so New Year's Day on a Saturday is observed on 31 December), plus notable days (Easter by the Meeus/Jones/Butcher algorithm, Mother's/Father's Day, Halloween, Election Day in even years, Black Friday, Tax Day moved off weekends and Emancipation Day). Clock changes are found by comparing the zone's UTC offset day to day, so they are right for any zone. Setting `holidays`: `all` (default), `federal`, `off`. No network, no list to update each year.
