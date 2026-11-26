@@ -1,5 +1,8 @@
 // The one cron (every 5 minutes): reminders, morning brief, housekeeping, weekly backup.
 import type { Env } from "./env";
+import { holidayLine } from "./core/day";
+import { holidayMode, notableDays } from "./core/holidays";
+import type { CivilDate } from "./core/time";
 import { groupItems } from "./core/group";
 import { dueReminders, planPush, type ReminderItem } from "./core/reminders";
 import { addDays, civilOf, localParts, startOfLocalDay } from "./core/time";
@@ -99,7 +102,7 @@ async function reminders(repo: Repo, rs: ReturnType<typeof reminderSettings>, no
   };
   const badge = g.today.length + g.overdue.length;
   const payload = plan.brief
-    ? briefNotice({ today: g.today.length, overdue: g.overdue.length, titles: await titlesOf([...g.overdue, ...g.today].map((i) => i.id)) })
+    ? briefNotice({ today: g.today.length, overdue: g.overdue.length, titles: await titlesOf([...g.overdue, ...g.today].map((i) => i.id)), holiday: await holidayGreeting(repo, today, rs.tz) })
     : reminderNotice({
         ids: [...new Set(plan.reminders.map((r) => r.itemId))],
         titles: await titlesOf([...new Set(plan.reminders.map((r) => r.itemId))]),
@@ -124,6 +127,17 @@ async function reminders(repo: Repo, rs: ReturnType<typeof reminderSettings>, no
       .prepare("INSERT INTO events (id, at, type, nudge_type, payload_json) VALUES (?, ?, 'push_sent', ?, ?)")
       .bind(crypto.randomUUID(), iso, plan.brief ? "brief" : "reminder", JSON.stringify({ items: plan.reminders.length, devices: delivered })),
   ]);
+}
+
+/** "Happy Thanksgiving!" on a holiday, else null. Never throws: the brief must go out regardless. */
+async function holidayGreeting(repo: Repo, today: CivilDate, tz: string): Promise<string | null> {
+  try {
+    const h = notableDays(today, today, tz, holidayMode(await getSetting(repo.db, "holidays"))).filter((x) => !x.name.endsWith("(observed)"));
+    const lead = h.find((x) => x.kind === "federal") ?? h[0];
+    return lead ? holidayLine(lead) : null;
+  } catch {
+    return null;
+  }
 }
 
 async function housekeeping(env: Env, now: Date) {

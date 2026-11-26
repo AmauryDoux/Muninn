@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "./api";
+import { CalendarSettings } from "./calsettings";
 import { PasswordHint, errText, registerPasskey } from "./auth";
 import { ago, setTz } from "./fmt";
 import { Health } from "./health";
@@ -160,6 +161,8 @@ export function Settings({ onSignedOut }: { onSignedOut: () => void }) {
         </div>
         <button className="btn primary">Save</button>
       </form>
+
+      <CalendarSettings settings={s.settings} onMsg={setMsg} />
 
       <LifeSettings settings={s.settings} onMsg={setMsg} />
 

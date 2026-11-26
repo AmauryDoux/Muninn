@@ -1,3 +1,4 @@
+import { getCalendar } from "./calendar";
 import type { Env } from "./env";
 import { handleAuth, requireFresh, requireSession } from "./auth";
 import { Cipher } from "./lib/crypto";
@@ -113,6 +114,7 @@ async function api(req: Request, env: Env): Promise<Response> {
     }
   }
   if (path === "/api/brief" && m === "GET") return getBrief(repo, rs);
+  if (path === "/api/calendar" && m === "GET") return getCalendar(repo, url, rs.tz);
 
   if (path === "/api/people" && m === "GET") return listPeople(repo);
   if (path === "/api/people" && m === "POST") return createPerson(repo, req);

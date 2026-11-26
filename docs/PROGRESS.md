@@ -1,5 +1,12 @@
 # Progress and decisions
 
+## 2026-11-26: holidays, daily summary, calendar view
+
+- **Holidays are computed, not fetched** (`worker/core/holidays.ts`): the 11 US federal holidays with the 5 U.S.C. 6103 observed-day rule (Saturday to Friday, Sunday to Monday, so New Year's Day on a Saturday is observed on 31 December), plus notable days (Easter by the Meeus/Jones/Butcher algorithm, Mother's/Father's Day, Halloween, Election Day in even years, Black Friday, Tax Day moved off weekends and Emancipation Day). Clock changes are found by comparing the zone's UTC offset day to day, so they are right for any zone. Setting `holidays`: `all` (default), `federal`, `off`. No network, no list to update each year.
+- **The daily summary headline is code, not AI** ("Today is Thursday, November 26. Happy Thanksgiving!"). `GET /api/brief` gains `day`: headline, today's holidays/dates/events, and holidays and important dates in the next 7 days. The AI line is unchanged and its cache key too. The morning brief push uses the holiday greeting as its title.
+- **`GET /api/calendar?from&to`** (inclusive, at most 62 days) returns holidays, important dates (birthdays repeat yearly, never before the birth year), dated items (open and done) and, later, linked calendar events. An item with a multi-day window is shown once, on its last day, as "by", not on every day of the range.
+- **The Upcoming tab is now Calendar**, with Month and Upcoming (the old list) views; the choice is remembered on the device.
+
 ## 2026-11-24: life features, proactive tips, iPhone UI
 
 All 12 roadmap features plus proactive and pattern-based advice. Migration `0002_life.sql` is additive (new columns, indexes, a `tips` table).

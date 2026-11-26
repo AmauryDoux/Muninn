@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, flushQueue, queuedCount, setAuthHandlers, type Item, type Person, type Tip } from "./api";
 import { Login, Reauth, Setup, errText, registerPasskey } from "./auth";
+import { DayCard, MonthView, type DaySummary } from "./calendar";
 import { CaptureBox } from "./capture";
 import { setBadge } from "./badge";
 import { setTz } from "./fmt";
@@ -24,7 +25,7 @@ type Tab = "home" | "upcoming" | "life" | "know" | "settings";
 
 const TABS: [Tab, string, string][] = [
   ["home", "Today", "today"],
-  ["upcoming", "Upcoming", "calendar"],
+  ["upcoming", "Calendar", "calendar"],
   ["life", "Life", "life"],
   ["know", "Memory", "known"],
   ["settings", "Settings", "settings"],
@@ -79,6 +80,7 @@ export function App() {
 
 interface Brief {
   summary: string;
+  day: DaySummary | null;
   date: string;
   today: Item[];
   overdue: Item[];
@@ -159,7 +161,7 @@ function Main({ hasPasskey, onSignedOut, onPasskeyAdded }: { hasPasskey: boolean
   };
 
   const counts = { overdue: brief?.overdue.length ?? 0, today: brief?.today.length ?? 0 };
-  const titles: Record<Tab, string> = { home: greeting(), upcoming: "Upcoming", life: "Life", know: "Memory", settings: "Settings" };
+  const titles: Record<Tab, string> = { home: greeting(), upcoming: "Calendar", life: "Life", know: "Memory", settings: "Settings" };
   const showComposer = !sub && (tab === "home" || tab === "upcoming" || tab === "life");
   const now = new Date();
 
@@ -177,7 +179,7 @@ function Main({ hasPasskey, onSignedOut, onPasskeyAdded }: { hasPasskey: boolean
       {!sub && (
         <div className="titlebar">
           <h1 className="largetitle">{titles[tab]}</h1>
-          {tab === "home" && <p className="subtitle">{now.toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" })}</p>}
+          {tab === "home" && !brief?.day && <p className="subtitle">{now.toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" })}</p>}
         </div>
       )}
       <main className={showComposer ? "" : "no-composer"}>
@@ -209,31 +211,12 @@ function Main({ hasPasskey, onSignedOut, onPasskeyAdded }: { hasPasskey: boolean
                     }}
                   />
                 )}
-                {brief && (
-                  <section className="card">
-                    <p className="brief">{brief.summary}</p>
-                    <div className="brief-meta">
-                      <span>
-                        <b>{counts.today}</b> today
-                      </span>
-                      {counts.overdue > 0 && (
-                        <span className="tone-bad">
-                          <b>{counts.overdue}</b> overdue
-                        </span>
-                      )}
-                    </div>
-                  </section>
-                )}
+                {brief && <DayCard day={brief.day} summary={brief.summary} counts={counts} />}
                 {brief && <Tips tips={brief.tips} onChange={loadBrief} />}
                 <OpenList items={items} onChange={() => (loadItems(), loadBrief())} only={["overdue", "today", "anytime"]} emptyText="Nothing due. Tell me what's on your mind." />
               </>
             )}
-            {tab === "upcoming" && (
-              <>
-                <OpenList items={items} onChange={loadItems} only={["upcoming", "snoozed"]} emptyText="Nothing scheduled ahead." />
-                <DoneSection />
-              </>
-            )}
+            {tab === "upcoming" && <CalendarTab items={items} onChange={loadItems} />}
             {tab === "life" && <LifeHome />}
             {tab === "know" && <Know onPeopleChanged={loadPeople} />}
             {tab === "settings" && <Settings onSignedOut={onSignedOut} />}
@@ -270,6 +253,46 @@ function Main({ hasPasskey, onSignedOut, onPasskeyAdded }: { hasPasskey: boolean
         ))}
       </nav>
     </div>
+  );
+}
+
+const VIEW_KEY = "muninn:calendar-view";
+
+function CalendarTab({ items, onChange }: { items: Item[]; onChange: () => void }) {
+  const [view, setView] = useState<"month" | "list">(() => {
+    try {
+      return localStorage.getItem(VIEW_KEY) === "list" ? "list" : "month";
+    } catch {
+      return "month";
+    }
+  });
+  const pick = (v: "month" | "list") => {
+    setView(v);
+    try {
+      localStorage.setItem(VIEW_KEY, v);
+    } catch {
+      /* private mode: not remembered */
+    }
+  };
+  return (
+    <>
+      <div className="seg" role="tablist">
+        <button role="tab" aria-selected={view === "month"} className={view === "month" ? "on" : ""} onClick={() => pick("month")}>
+          Month
+        </button>
+        <button role="tab" aria-selected={view === "list"} className={view === "list" ? "on" : ""} onClick={() => pick("list")}>
+          Upcoming
+        </button>
+      </div>
+      {view === "month" ? (
+        <MonthView />
+      ) : (
+        <>
+          <OpenList items={items} onChange={onChange} only={["upcoming", "snoozed"]} emptyText="Nothing scheduled ahead." />
+          <DoneSection />
+        </>
+      )}
+    </>
   );
 }
 

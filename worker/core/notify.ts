@@ -39,9 +39,10 @@ export function reminderNotice(o: { ids: string[]; titles: string[] | null; endi
   };
 }
 
-export function briefNotice(o: { today: number; overdue: number; titles: string[] | null }): Notice {
+/** `holiday`: a greeting for today ("Happy Thanksgiving!"), used as the title. Holiday names are not private. */
+export function briefNotice(o: { today: number; overdue: number; titles: string[] | null; holiday?: string | null }): Notice {
   const counts = [`${o.today} for today`];
   if (o.overdue) counts.push(`${o.overdue} overdue`);
   const body = o.titles?.length ? `${counts.join(", ")}: ${listTitles(o.titles)}` : counts.join(", ");
-  return { title: "Morning brief", body, url: "/?view=brief", tag: "brief", badge: o.today + o.overdue };
+  return { title: o.holiday || "Morning brief", body, url: "/?view=brief", tag: "brief", badge: o.today + o.overdue };
 }
