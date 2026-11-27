@@ -6,17 +6,15 @@ Worker secrets (`DATA_KEY`, `ANTHROPIC_API_KEY`, `VAPID_PRIVATE_KEY`, `GOOGLE_*`
 
 ## 1. Cloudflare API token (least privilege)
 
-1. Open [dash.cloudflare.com/profile/api-tokens](https://dash.cloudflare.com/profile/api-tokens) and sign in.
-2. **Create Token** → at the bottom, **Create Custom Token** → **Get started**.
-3. Token name: `muninn-github-deploy`.
-4. Permissions, three rows, all **Account**:
-   - `Workers Scripts` → `Edit` (upload the Worker, read its current bindings)
-   - `D1` → `Edit` (apply migrations)
-   - `Account Settings` → `Read` (wrangler looks up the `workers.dev` subdomain)
-5. Account Resources: **Include** → your account (not "All accounts").
-6. Client IP Address Filtering: leave empty. GitHub's runners have no fixed IP.
-7. TTL: optional. If you set an end date, deploys will fail with an auth error on that day until you replace the token.
-8. **Continue to summary** → **Create Token** → copy the token now (it is shown once).
+1. Open [dash.cloudflare.com/profile/api-tokens](https://dash.cloudflare.com/profile/api-tokens) and sign in → **Create Token**.
+2. Token name: `muninn-github-deploy`.
+3. Policies: tap **Start from scratch** (marked Custom), not one of the templates. Choose **Account** (not Zone or User), then your own account, **not "All accounts"**: otherwise the token also reaches any account you are later invited to.
+4. Tick three permissions:
+   - Developer Platform → `Workers Scripts` → `Edit` (upload the Worker, read its current bindings)
+   - Developer Platform → `D1` → `Edit` (apply migrations)
+   - Account & Billing → `Account Settings` → `Read` (wrangler looks up the `workers.dev` subdomain)
+5. Token expiration: "No expiration" is fine (with an end date, deploys fail that day until you replace the token). Client IP address filtering: leave empty, GitHub's runners have no fixed IP.
+6. **Continue to summary**, check it shows your account name and the three permissions → **Create Token** → copy the token now (it is shown once).
 
 Nothing else is needed: no zone permissions, no KV, no R2. `D1:Edit` can read and change the database and `Workers Scripts:Edit` can replace the Worker, so treat the token as a production credential: it lives only in GitHub secrets, and you can roll it from the same API Tokens page at any time.
 
@@ -37,7 +35,7 @@ On github.com in the phone browser (the GitHub app can't edit these): repository
 |---|---|
 | `CLOUDFLARE_API_TOKEN` | the token from step 1 |
 | `CLOUDFLARE_ACCOUNT_ID` | the account ID |
-| `ANTHROPIC_API_KEY` | the same Anthropic key as the Worker secret |
+| `ANTHROPIC_API_KEY` | a separate key, e.g. `muninn-github-ci` from console.anthropic.com/settings/keys (Cloudflare can't show the Worker's key again, and a separate key can be revoked alone) |
 
 **Variables** tab → **New repository variable**:
 
