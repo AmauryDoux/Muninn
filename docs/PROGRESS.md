@@ -1,5 +1,10 @@
 # Progress and decisions
 
+## 2026-11-27: deploy on push to main
+- The CI `deploy` job is the normal way to ship: push to `main` → tests → `check:ai` (key from a GitHub secret, still required) → live config check → D1 migrations → `wrangler deploy`. Setup in docs/DEPLOY.md, phone only.
+- New `scripts/check-live-config.mjs`: `wrangler deploy` replaces every binding and plain var, so a missing repository variable would silently unbind R2 or change the push key. The job now reads the live Worker's bindings first and stops on a dropped or repointed binding or a VAPID change (override: `ALLOW_CONFIG_DRIFT=true` for one run).
+- Actions pinned to commit SHAs; one deploy at a time (`concurrency`); `workflow_dispatch` for a redeploy. Dropped `environment: production`: environments in private repos need a paid GitHub plan, and the secrets are repository secrets.
+
 ## 2026-11-26: Google Calendar, read-only
 
 - **Chosen by the user:** Google sign-in, read-only (over two-way sync or pasted secret iCal links). Scopes are `calendar.calendarlist.readonly` + `calendar.events.readonly` + `openid email`, narrower than `calendar.readonly` (no ACLs or settings).

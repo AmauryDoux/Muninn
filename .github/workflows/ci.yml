@@ -4,18 +4,23 @@ on:
   pull_request:
   push:
     branches: [main]
+  # Actions → CI → Run workflow (main): redeploy without a new commit, e.g. after setting the secrets.
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+# Third-party actions are pinned to a commit, so a moved tag can't change what runs with the deploy secrets.
 jobs:
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: npm
@@ -25,20 +30,28 @@ jobs:
       - run: npm test
       - run: npm run build
       - name: Scan for secrets
-        uses: gitleaks/gitleaks-action@v2
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   deploy:
-    # Off until you set the repository variable DEPLOY_ENABLED=true, the variables read by scripts/ci-config.mjs
-    # and the secrets below. Migrations run before the new code, so a deploy never runs against an old schema.
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.DEPLOY_ENABLED == 'true'
+    # Runs on every push to main (and Run workflow on main) once the repository variable DEPLOY_ENABLED is "true".
+    # Set it to anything else to pause deploys without touching code. Order: tests (check job) → AI schema check →
+    # live config check → D1 migrations → deploy. Every step before the migrations changes nothing, so a failure
+    # there leaves production exactly as it was.
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && vars.DEPLOY_ENABLED == 'true'
     needs: check
     runs-on: ubuntu-latest
-    environment: production
+    timeout-minutes: 15
+    # One deploy at a time; a push during a deploy waits instead of racing its migrations.
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: npm
@@ -56,11 +69,18 @@ jobs:
         run: npm run check:ai
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-      - name: Apply D1 migrations
+      - name: Compare with the live Worker (stops if the deploy would drop a binding or change the push key)
+        run: node scripts/check-live-config.mjs
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          ALLOW_CONFIG_DRIFT: ${{ vars.ALLOW_CONFIG_DRIFT }}
+      - name: Apply D1 migrations (only the ones not applied yet, in order)
         run: npx wrangler d1 migrations apply muninn --remote
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CI: "true"
       - name: Deploy
         run: npx wrangler deploy
         env:
