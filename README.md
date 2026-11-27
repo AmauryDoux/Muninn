@@ -70,7 +70,7 @@ npm run deploy
 - **Weather-aware seasonal tips**: Settings → Life → Use my location (rounded to about 1 km, sent to Open-Meteo once a day).
 - **Vectorize** (free tier covers a personal install): `npx wrangler vectorize create muninn-captures-v1 --dimensions=768 --metric=cosine`, then uncomment the binding in `wrangler.jsonc`. The cron copies existing vectors into it, 100 every 5 minutes. Without it, search scans up to 3,000 vectors in D1, which gets close to the free plan's CPU limit as notes grow.
 - **Weekly backup and photos (R2)**: `npx wrangler r2 bucket create muninn-backups`, then uncomment the `r2_buckets` binding. The same bucket holds the Sunday backup (`backup-*.json.enc`) and receipt photos (`files/`), all sealed with `DATA_KEY`.
-- **Deploy from GitHub Actions** (merge = deploy, handy from the phone): secrets `CLOUDFLARE_API_TOKEN` (Workers Scripts:Edit and D1:Edit on this account) and `CLOUDFLARE_ACCOUNT_ID`; variables `DEPLOY_ENABLED=true`, `D1_DATABASE_ID`, `VAPID_PUBLIC_KEY`, optionally `VAPID_SUBJECT`, `ENABLE_VECTORIZE=true`, `ENABLE_BACKUPS=true`. The job fills `wrangler.jsonc` from those (it refuses to deploy without the push key), applies migrations, then deploys.
+- **Deploy from GitHub Actions** (push = deploy, no terminal, works from the phone): see [docs/DEPLOY.md](docs/DEPLOY.md) for the API token, secrets and variables. The job runs the tests and the AI check, stops if the new config would drop a live binding or change the push key, applies new migrations, then deploys.
 
 ## Keep `DATA_KEY` safe
 Every note, name and backup is encrypted with it. Keep a copy in your password manager. Without it, nothing can be restored.
