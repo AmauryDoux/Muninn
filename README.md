@@ -72,6 +72,18 @@ npm run deploy
 - **Weekly backup and photos (R2)**: `npx wrangler r2 bucket create muninn-backups`, then uncomment the `r2_buckets` binding. The same bucket holds the Sunday backup (`backup-*.json.enc`) and receipt photos (`files/`), all sealed with `DATA_KEY`.
 - **Deploy from GitHub Actions** (push = deploy, no terminal, works from the phone): see [docs/DEPLOY.md](docs/DEPLOY.md) for the API token, secrets and variables. The job runs the tests and the AI check, stops if the new config would drop a live binding or change the push key, applies new migrations, then deploys.
 
+## Google Calendar (read-only)
+Muninn shows events from every calendar of every Google account you link, next to holidays and your items. It can read events, never change them.
+1. [console.cloud.google.com](https://console.cloud.google.com): create a project, e.g. **Muninn**.
+2. APIs & Services → Library → enable **Google Calendar API**.
+3. Google Auth Platform → Get started: app name Muninn, your email, audience **External**.
+4. Data access → Add scopes: `.../auth/calendar.calendarlist.readonly` and `.../auth/calendar.events.readonly` (plus `openid` and `email`, which are non-sensitive).
+5. Audience → **Publish app** (status "In production"). In "Testing", Google expires refresh tokens after 7 days and the link breaks every week. Unverified is fine for personal use: at sign-in choose Advanced → Go to Muninn.
+6. Clients → Create client → **Web application**, authorized redirect URI `https://<your-worker-host>/api/google/callback`.
+7. Cloudflare dashboard → **Workers & Pages** → `muninn` → **Settings** → **Variables and Secrets** → **Add**: type **Secret**, name `GOOGLE_CLIENT_ID`, paste the client ID → **Deploy**. Same for `GOOGLE_CLIENT_SECRET`. (From a terminal: `npx wrangler secret put GOOGLE_CLIENT_ID`.) They live only in Cloudflare, not in GitHub; deploys from GitHub keep them. Then in Muninn: Settings → Calendar → Link Google Calendar, once per account; one client serves them all.
+
+Tokens, account emails, calendar names and event titles are encrypted with `DATA_KEY`. Events from a month back to six months ahead are cached and refreshed about every 15 minutes (at most 8 Google calls per cron run, and nothing is rewritten when a calendar hasn't changed). Google's own "Holidays in …" calendars start switched off because Muninn computes holidays itself. Unlinking revokes access at Google. A Workspace (work) account may block unverified apps; that is an admin setting.
+
 ## Keep `DATA_KEY` safe
 Every note, name and backup is encrypted with it. Keep a copy in your password manager. Without it, nothing can be restored.
 

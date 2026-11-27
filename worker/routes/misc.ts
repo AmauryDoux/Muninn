@@ -10,6 +10,7 @@ import { ulid } from "../lib/ulid";
 import { isAllowedPushEndpoint, sendPush } from "../lib/webpush";
 import type { ItemRow, Repo } from "../repo";
 import { briefText } from "../brief";
+import { daySummary, type DaySummary, type EventSource } from "../calendar";
 import { currentTips } from "../advice";
 
 // ---- push ----
@@ -111,6 +112,7 @@ export async function getSettings(repo: Repo): Promise<Response> {
     push_titles: "1",
     ai_budget_usd: String(DEFAULT_AI_BUDGET_USD),
     tz_follow: "0",
+    holidays: "all",
   };
   for (const k of USER_SETTING_KEYS) out[k] = m.get(k) ?? defaults[k] ?? null;
   return json({ settings: out, vapid_public_key: repo.env.VAPID_PUBLIC_KEY || null, vectorize: !!repo.env.VECTORIZE });
@@ -141,6 +143,8 @@ export async function putSettings(repo: Repo, req: Request): Promise<Response> {
     } else if (k === "ai_budget_usd") {
       const n = Number(s);
       if (!/^\d+(\.\d{1,2})?$/.test(s) || n < 0.1 || n > 100) throw new HttpError(400, "bad_ai_budget_usd", "Use an amount from 0.10 to 100.");
+    } else if (k === "holidays") {
+      if (s !== "all" && s !== "federal" && s !== "off") throw new HttpError(400, "bad_holidays");
     } else if (k === "tips_enabled" || k === "tips_ai" || k === "push_titles" || k === "tz_follow") {
       if (s !== "0" && s !== "1") throw new HttpError(400, `bad_${k}`);
     } else if (!HHMM.test(s)) throw new HttpError(400, `bad_${k}`);
@@ -167,7 +171,7 @@ export async function transcribeAudio(repo: Repo, req: Request): Promise<Respons
 
 // ---- brief ----
 
-export async function getBrief(repo: Repo, rs: ReminderSettings): Promise<Response> {
+export async function getBrief(repo: Repo, rs: ReminderSettings, events?: EventSource): Promise<Response> {
   const now = new Date();
   const today = civilOf(now, rs.tz);
   const dayStart = startOfLocalDay(today, rs.tz);
@@ -180,6 +184,12 @@ export async function getBrief(repo: Repo, rs: ReminderSettings): Promise<Respon
     .bind(now.toISOString())
     .first<{ id: string; subject_type: string; subject_id: string | null; key: string }>();
   const text = await briefText(repo, civilToIso(today), g.today, g.overdue, rs.tz);
+  let day: DaySummary | null = null;
+  try {
+    day = await daySummary(repo, now, rs.tz, events);
+  } catch (e) {
+    console.warn("day summary failed", e instanceof Error ? e.message : e);
+  }
   let tips: Awaited<ReturnType<typeof currentTips>> = [];
   try {
     tips = await currentTips(repo, now, rs.tz);
@@ -189,6 +199,7 @@ export async function getBrief(repo: Repo, rs: ReminderSettings): Promise<Respon
   return json({
     date: civilToIso(today),
     summary: text,
+    day,
     tips,
     today: g.today,
     overdue: g.overdue,

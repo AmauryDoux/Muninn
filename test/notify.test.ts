@@ -34,3 +34,11 @@ describe("notification text", () => {
     expect(n.badge).toBe(3);
   });
 });
+
+describe("brief notice on a holiday", () => {
+  it("uses the greeting as the title", async () => {
+    const { briefNotice } = await import("../worker/core/notify");
+    expect(briefNotice({ today: 1, overdue: 0, titles: null, holiday: "Happy Thanksgiving!" }).title).toBe("Happy Thanksgiving!");
+    expect(briefNotice({ today: 1, overdue: 0, titles: null }).title).toBe("Morning brief");
+  });
+});

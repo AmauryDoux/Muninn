@@ -3,7 +3,8 @@
 // `wrangler d1 execute`. Unlike the JSON export (decrypted, for you to read), this brings back sign-in too.
 
 /** In foreign-key order. Left out: sessions and login attempts (short-lived), push devices (re-subscribe after a
- * restore) and search vectors (rebuilt by the cron from the notes). File bytes stay in R2 under files/. */
+ * restore), search vectors (rebuilt by the cron from the notes) and Google events (fetched again). File bytes stay
+ * in R2 under files/. */
 export const SNAPSHOT_TABLES = [
   "settings",
   "people",
@@ -20,10 +21,12 @@ export const SNAPSHOT_TABLES = [
   "passkeys",
   "api_tokens",
   "files",
+  "google_accounts",
+  "google_calendars",
 ] as const;
 
 /** Settings that are only transient state. */
-const SKIP_SETTING = /^(challenge:|brief:|cron_last_run$)/;
+const SKIP_SETTING = /^(challenge:|brief:|gstate:|cron_last_run$)/;
 
 export interface Snapshot {
   format: "muninn-snapshot";
@@ -36,7 +39,13 @@ export async function buildSnapshot(db: D1Database, now = new Date()): Promise<S
   const tables: Snapshot["tables"] = {};
   for (const t of SNAPSHOT_TABLES) {
     const { results } = await db.prepare(`SELECT * FROM ${t}`).all<Record<string, unknown>>();
-    tables[t] = t === "settings" ? results.filter((r) => !SKIP_SETTING.test(String(r.key))) : results;
+    tables[t] =
+      t === "settings"
+        ? results.filter((r) => !SKIP_SETTING.test(String(r.key)))
+        : // Events are not backed up, so a restored calendar must not think its (empty) copy is current.
+          t === "google_calendars"
+          ? results.map((r) => ({ ...r, events_hash: null, synced_at: null }))
+          : results;
   }
   return { format: "muninn-snapshot", version: 1, created_at: now.toISOString(), tables };
 }

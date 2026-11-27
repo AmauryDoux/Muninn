@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "./api";
+import { CalendarSettings } from "./calsettings";
 import { PasswordHint, errText, registerPasskey } from "./auth";
 import { ago, setTz } from "./fmt";
 import { Health } from "./health";
@@ -161,6 +162,8 @@ export function Settings({ onSignedOut }: { onSignedOut: () => void }) {
         <button className="btn primary">Save</button>
       </form>
 
+      <CalendarSettings settings={s.settings} onMsg={setMsg} />
+
       <LifeSettings settings={s.settings} onMsg={setMsg} />
 
       <Shortcuts onMsg={setMsg} />
@@ -201,7 +204,7 @@ export function Settings({ onSignedOut }: { onSignedOut: () => void }) {
   );
 }
 
-function Toggle({ on, label, hint, onToggle }: { on: boolean; label: string; hint: string; onToggle: () => void }) {
+export function Toggle({ on, label, hint, onToggle }: { on: boolean; label: string; hint: string; onToggle: () => void }) {
   return (
     <div className="toggle">
       <div>

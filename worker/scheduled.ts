@@ -1,5 +1,9 @@
 // The one cron (every 5 minutes): reminders, morning brief, housekeeping, weekly backup.
 import type { Env } from "./env";
+import { holidayLine } from "./core/day";
+import { purgeGoogleStates, syncGoogle } from "./google";
+import { holidayMode, notableDays } from "./core/holidays";
+import type { CivilDate } from "./core/time";
 import { groupItems } from "./core/group";
 import { dueReminders, planPush, type ReminderItem } from "./core/reminders";
 import { addDays, civilOf, localParts, startOfLocalDay } from "./core/time";
@@ -43,6 +47,8 @@ export async function runScheduled(env: Env, now = new Date()): Promise<void> {
   if (at(6)) await job("tips", () => refreshTips(repo, now, rs.tz, true));
   if (p.weekday === 0 && at(18)) await job("review", () => weeklyReviewPush(repo, rs, now));
   if (p.minute < 5) await housekeeping(env, now);
+  if (p.minute < 5) await job("google-states", () => purgeGoogleStates(env.DB, repo.cipher, now));
+  await job("google", () => syncGoogle(env, repo.cipher, now));
   if (env.BACKUPS && p.weekday === 0 && p.hour === 3 && p.minute < 5) await job("backup", () => backup(repo, now));
   await job("vectors", () => maintainVectors(env, repo.cipher, (t) => embed(env, t)));
   // Heartbeat for the health view: a cron that stopped is otherwise invisible until a reminder is missed.
@@ -99,7 +105,7 @@ async function reminders(repo: Repo, rs: ReturnType<typeof reminderSettings>, no
   };
   const badge = g.today.length + g.overdue.length;
   const payload = plan.brief
-    ? briefNotice({ today: g.today.length, overdue: g.overdue.length, titles: await titlesOf([...g.overdue, ...g.today].map((i) => i.id)) })
+    ? briefNotice({ today: g.today.length, overdue: g.overdue.length, titles: await titlesOf([...g.overdue, ...g.today].map((i) => i.id)), holiday: await holidayGreeting(repo, today, rs.tz) })
     : reminderNotice({
         ids: [...new Set(plan.reminders.map((r) => r.itemId))],
         titles: await titlesOf([...new Set(plan.reminders.map((r) => r.itemId))]),
@@ -124,6 +130,17 @@ async function reminders(repo: Repo, rs: ReturnType<typeof reminderSettings>, no
       .prepare("INSERT INTO events (id, at, type, nudge_type, payload_json) VALUES (?, ?, 'push_sent', ?, ?)")
       .bind(crypto.randomUUID(), iso, plan.brief ? "brief" : "reminder", JSON.stringify({ items: plan.reminders.length, devices: delivered })),
   ]);
+}
+
+/** "Happy Thanksgiving!" on a holiday, else null. Never throws: the brief must go out regardless. */
+async function holidayGreeting(repo: Repo, today: CivilDate, tz: string): Promise<string | null> {
+  try {
+    const h = notableDays(today, today, tz, holidayMode(await getSetting(repo.db, "holidays"))).filter((x) => !x.name.endsWith("(observed)"));
+    const lead = h.find((x) => x.kind === "federal") ?? h[0];
+    return lead ? holidayLine(lead) : null;
+  } catch {
+    return null;
+  }
 }
 
 async function housekeeping(env: Env, now: Date) {

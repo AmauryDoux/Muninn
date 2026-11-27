@@ -1,3 +1,5 @@
+import { getCalendar } from "./calendar";
+import { finishConnect, googleEvents, listGoogle, patchGoogleCalendar, startConnect, syncGoogleNow, unlinkGoogle } from "./google";
 import type { Env } from "./env";
 import { handleAuth, requireFresh, requireSession } from "./auth";
 import { Cipher } from "./lib/crypto";
@@ -70,6 +72,10 @@ async function api(req: Request, env: Env): Promise<Response> {
   const cal = path.match(/^\/api\/calendar\/(mnn_[A-Za-z0-9_-]{20,80})\.ics$/);
   if (cal && (m === "GET" || m === "HEAD")) return calendarFeed(env, req, await getCipher(env), cal[1]);
 
+  // Google's OAuth redirect. The SameSite=Strict session cookie does not come along on this cross-site redirect;
+  // the single-use state ties it to a connect started by the signed-in user (see worker/google.ts).
+  if (path === "/api/google/callback" && m === "GET") return finishConnect(env, await getCipher(env), url);
+
   // CSRF defence in depth (cookies are already SameSite=Strict): state-changing calls must come from our own origin.
   if (m !== "GET" && m !== "HEAD") {
     const origin = req.headers.get("Origin");
@@ -112,7 +118,13 @@ async function api(req: Request, env: Env): Promise<Response> {
       return deleteFile(repo, mm[1]);
     }
   }
-  if (path === "/api/brief" && m === "GET") return getBrief(repo, rs);
+  if (path === "/api/brief" && m === "GET") return getBrief(repo, rs, googleEvents(repo));
+  if (path === "/api/calendar" && m === "GET") return getCalendar(repo, url, rs.tz, googleEvents(repo));
+  if (path === "/api/google" && m === "GET") return listGoogle(repo);
+  if (path === "/api/google/connect" && m === "POST") return startConnect(repo, req);
+  if (path === "/api/google/sync" && m === "POST") return syncGoogleNow(repo);
+  if ((mm = path.match(new RegExp(`^/api/google/calendars/${ID}$`))) && m === "PATCH") return patchGoogleCalendar(repo, req, mm[1]);
+  if ((mm = path.match(new RegExp(`^/api/google/accounts/${ID}$`))) && m === "DELETE") return unlinkGoogle(repo, mm[1]);
 
   if (path === "/api/people" && m === "GET") return listPeople(repo);
   if (path === "/api/people" && m === "POST") return createPerson(repo, req);

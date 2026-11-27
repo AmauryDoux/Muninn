@@ -18,4 +18,7 @@ export interface Env {
   DATA_KEY: string;          // base64url, 32 bytes
   VAPID_PRIVATE_KEY: string; // base64url, 32-byte P-256 scalar
   SETUP_CODE: string;        // one-time code for first sign-in
+  // Optional: Google Calendar (read-only). Both from a Google Cloud OAuth "Web application" client.
+  GOOGLE_CLIENT_ID?: string;
+  GOOGLE_CLIENT_SECRET?: string;
 }

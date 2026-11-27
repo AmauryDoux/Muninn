@@ -56,3 +56,6 @@ All under `/api`, JSON, same-origin `Origin` required on writes.
 | `GET|POST /things`, `GET|PATCH|DELETE /things/:id` | session (delete: fresh) | Home inventory |
 | `GET /tips`, `POST /tips/:id` (`act|snooze|dismiss`) | session | Proactive tips |
 | `GET /digest` | session | Ideas grouped by similarity |
+| `GET /google`, `POST /google/connect`, `POST /google/sync`, `PATCH /google/calendars/:id`, `DELETE /google/accounts/:id` | session | Linked Google accounts (read-only) |
+| `GET /google/callback` | single-use OAuth state | Google's redirect back after consent |
+| `GET /calendar?from=&to=` | session | Holidays, important dates, dated items and linked calendar events per local day (max 62 days) |
